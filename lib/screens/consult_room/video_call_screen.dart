@@ -49,12 +49,23 @@ class VideoCallScreen extends StatelessWidget {
         appBar: AppBar(
           backgroundColor: AppColors.blue50,
           elevation: 0,
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child: Container(height: 1, color: AppColors.line),
+          ),
           title: Row(
             children: [
               InitialsAvatar(name: patient?.name ?? '—', size: 32, fontSize: 11),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(patient?.name ?? 'Video Call', style: AppText.display(size: 14.5), overflow: TextOverflow.ellipsis),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(patient?.name ?? 'Video Call', style: AppText.display(size: 14.5), overflow: TextOverflow.ellipsis),
+                    Text(_statusLabel(app.rtcState), style: AppText.body(size: 10.5, color: _statusColor(app.rtcState), weight: FontWeight.w600)),
+                  ],
+                ),
               ),
             ],
           ),
@@ -62,5 +73,31 @@ class VideoCallScreen extends StatelessWidget {
         body: const SingleChildScrollView(child: CallTab()),
       ),
     );
+  }
+
+  String _statusLabel(String rtcState) {
+    switch (rtcState) {
+      case 'connecting':
+        return 'Connecting…';
+      case 'connected':
+        return 'Live';
+      case 'reconnecting':
+        return 'Reconnecting…';
+      default:
+        return 'Not connected';
+    }
+  }
+
+  Color _statusColor(String rtcState) {
+    switch (rtcState) {
+      case 'connecting':
+        return AppColors.blue600;
+      case 'connected':
+        return AppColors.green600;
+      case 'reconnecting':
+        return AppColors.amber600;
+      default:
+        return AppColors.ink400;
+    }
   }
 }

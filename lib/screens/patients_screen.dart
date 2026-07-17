@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
@@ -9,6 +10,7 @@ import '../widgets/app_button.dart';
 import '../widgets/app_card.dart';
 import '../widgets/avatar.dart';
 import '../widgets/page_head.dart';
+import '../widgets/skeleton.dart';
 import '../widgets/status_badge.dart';
 
 /// Ported from `renderPatients()` — completed consultation history.
@@ -21,8 +23,7 @@ class PatientsScreen extends StatefulWidget {
 
 class _PatientsScreenState extends State<PatientsScreen> {
   final _searchController = TextEditingController();
-  int _visibleCount = 3; // Start with 3 items for lazy-load simulation
-  bool _loadingMore = false;
+  int _visibleCount = 3; // Start with 3 items, reveal more on demand
 
   @override
   void initState() {
@@ -41,16 +42,10 @@ class _PatientsScreenState extends State<PatientsScreen> {
     context.read<AppState>().searchHistory(_searchController.text);
   }
 
-  void _loadMore() async {
-    setState(() => _loadingMore = true);
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (mounted) {
-      setState(() {
-        _visibleCount += 3;
-        _loadingMore = false;
-      });
-    }
-  }
+  // The full history list is already loaded client-side (see
+  // AppState.loadPatientHistory) — revealing more of it is instant, so this
+  // doesn't fake a network round-trip with an artificial spinner.
+  void _loadMore() => setState(() => _visibleCount += 3);
 
   @override
   Widget build(BuildContext context) {
@@ -83,10 +78,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
         const SizedBox(height: 12),
 
         if (app.isLoadingHistory)
-          const Padding(
-            padding: EdgeInsets.all(20.0),
-            child: Center(child: CircularProgressIndicator()),
-          )
+          const _HistorySkeleton()
         else if (displayedList.isEmpty)
           Padding(
             padding: const EdgeInsets.all(24.0),
@@ -103,9 +95,13 @@ class _PatientsScreenState extends State<PatientsScreen> {
               border: Border(top: BorderSide(color: AppColors.line), bottom: BorderSide(color: AppColors.line)),
             ),
             child: Column(
-              children: displayedList
-                  .map((p) => _HistoryItem(patient: p, active: p.id == app.selectedHistoryId))
-                  .toList(),
+              children: [
+                for (var i = 0; i < displayedList.length; i++)
+                  _HistoryItem(patient: displayedList[i], active: displayedList[i].id == app.selectedHistoryId)
+                      .animate(delay: (i * 40).ms)
+                      .fadeIn(duration: 220.ms)
+                      .slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
+              ],
             ),
           ),
 
@@ -113,15 +109,13 @@ class _PatientsScreenState extends State<PatientsScreen> {
           if (historyList.length > _visibleCount)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              child: _loadingMore
-                  ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-                  : AppButton(
-                      label: 'Load More History',
-                      variant: AppButtonVariant.ghost,
-                      small: true,
-                      block: true,
-                      onPressed: _loadMore,
-                    ),
+              child: AppButton(
+                label: 'Load More History',
+                variant: AppButtonVariant.ghost,
+                small: true,
+                block: true,
+                onPressed: _loadMore,
+              ),
             ),
         ],
 
@@ -142,6 +136,41 @@ class _PatientsScreenState extends State<PatientsScreen> {
           _HistoryDetail(patient: sel),
         const SizedBox(height: 12),
       ],
+    );
+  }
+}
+
+class _HistorySkeleton extends StatelessWidget {
+  const _HistorySkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ShimmerLoading(
+      child: Column(
+        children: List.generate(
+          4,
+          (_) => Container(
+            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.lineSoft))),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+            child: Row(
+              children: [
+                const SkeletonBox(width: 36, height: 36, shape: BoxShape.circle),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      SkeletonBox(width: 130, height: 13),
+                      SizedBox(height: 6),
+                      SkeletonBox(width: 170, height: 11),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -275,7 +304,7 @@ class _HistoryDetail extends StatelessWidget {
                             } catch (e) {
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Could not open PDF: $e'), backgroundColor: AppColors.red600),
+                                  SnackBar(content: Text('Could not open the prescription PDF — ${app.describeError(e)}'), backgroundColor: AppColors.red600),
                                 );
                               }
                             }
@@ -307,7 +336,7 @@ class _HistoryDetail extends StatelessWidget {
                           if (m.aiSuggested)
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                              decoration: BoxDecoration(color: AppColors.teal100, borderRadius: BorderRadius.circular(4)),
+                              decoration: BoxDecoration(color: AppColors.teal100, borderRadius: BorderRadius.circular(AppRadius.xs)),
                               child: Text('AI Suggestion', style: AppText.mono(size: 7.5, color: AppColors.tealDark, weight: FontWeight.bold)),
                             ),
                         ],
@@ -358,7 +387,7 @@ class _SoapView extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
                   color: isAi ? AppColors.teal100 : AppColors.green100,
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
                 ),
                 child: Text(
                   isAi ? 'AI Scribe' : 'Edited',

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
@@ -6,7 +7,9 @@ import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_button.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_tabs.dart';
 import '../widgets/avatar.dart';
+import '../widgets/skeleton.dart';
 import '../widgets/status_badge.dart';
 import 'appointments_screen.dart';
 import 'consult_room/consult_room_screen.dart';
@@ -72,7 +75,12 @@ class _QueueScreenState extends State<QueueScreen> {
           if (app.noShowAlert != null) _NoShowBanner(alert: app.noShowAlert!),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(children: filtered.map((p) => _QueueCard(patient: p)).toList()),
+            child: Column(
+              children: [
+                for (var i = 0; i < filtered.length; i++)
+                  _QueueCard(patient: filtered[i]).animate(delay: (i * 40).ms).fadeIn(duration: 220.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
+              ],
+            ),
           ),
           const SizedBox(height: 8),
         ],
@@ -105,22 +113,19 @@ class _QueueScreenState extends State<QueueScreen> {
                       if (!_searching) _searchController.clear();
                     }),
                   ),
-                  IconButton(icon: const Icon(Icons.filter_list, color: AppColors.ink900), onPressed: () {}),
                 ],
               ),
             ),
-            SizedBox(
-              height: 36,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                children: [
-                  _FilterTab(label: 'All (${app.queue.length})', active: _filter == _QueueFilter.all, onTap: () => setState(() => _filter = _QueueFilter.all)),
-                  _FilterTab(label: 'Waiting ($waitingCount)', active: _filter == _QueueFilter.waiting, onTap: () => setState(() => _filter = _QueueFilter.waiting)),
-                  _FilterTab(label: 'In Consultation ($inConsultCount)', active: _filter == _QueueFilter.inConsultation, onTap: () => setState(() => _filter = _QueueFilter.inConsultation)),
-                  _FilterTab(label: 'Done ($doneCount)', active: _filter == _QueueFilter.done, onTap: () => setState(() => _filter = _QueueFilter.done)),
-                ],
-              ),
+            AppTabBar(
+              style: AppTabStyle.pill,
+              selected: _filter,
+              onChanged: (v) => setState(() => _filter = v as _QueueFilter),
+              tabs: [
+                AppTab(label: 'All (${app.queue.length})', value: _QueueFilter.all),
+                AppTab(label: 'Waiting ($waitingCount)', value: _QueueFilter.waiting),
+                AppTab(label: 'In Consultation ($inConsultCount)', value: _QueueFilter.inConsultation),
+                AppTab(label: 'Done ($doneCount)', value: _QueueFilter.done),
+              ],
             ),
             const SizedBox(height: 8),
             Expanded(
@@ -167,88 +172,47 @@ class _QueueScreenState extends State<QueueScreen> {
   }
 }
 
-class _FilterTab extends StatelessWidget {
-  const _FilterTab({required this.label, required this.active, required this.onTap});
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: Material(
-        color: active ? AppColors.blue600 : AppColors.white,
-        borderRadius: BorderRadius.circular(100),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(100),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(100), border: Border.all(color: active ? AppColors.blue600 : AppColors.line)),
-            alignment: Alignment.center,
-            child: Text(label, style: AppText.body(size: 11.5, weight: FontWeight.w700, color: active ? Colors.white : AppColors.ink600)),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _QueueSkeletons extends StatelessWidget {
   const _QueueSkeletons();
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      children: List.generate(3, (i) => const _SkeletonCard()),
+    return ShimmerLoading(
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        children: List.generate(3, (i) => const _SkeletonCard()),
+      ),
     );
   }
 }
 
-class _SkeletonCard extends StatefulWidget {
+class _SkeletonCard extends StatelessWidget {
   const _SkeletonCard();
 
   @override
-  State<_SkeletonCard> createState() => _SkeletonCardState();
-}
-
-class _SkeletonCardState extends State<_SkeletonCard> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(reverse: true);
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: Tween(begin: 0.45, end: 1.0).animate(_c),
-      child: AppCard(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(width: 40, height: 40, decoration: const BoxDecoration(color: AppColors.lineSoft, shape: BoxShape.circle)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(width: 120, height: 14, color: AppColors.lineSoft),
-                  const SizedBox(height: 6),
-                  Container(width: 80, height: 10, color: AppColors.lineSoft),
-                  const SizedBox(height: 10),
-                  Container(width: 60, height: 10, color: AppColors.lineSoft),
-                ],
-              ),
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SkeletonBox(width: 40, height: 40, shape: BoxShape.circle),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SkeletonBox(width: 120, height: 14),
+                const SizedBox(height: 6),
+                const SkeletonBox(width: 80, height: 10),
+                const SizedBox(height: 10),
+                const SkeletonBox(width: 60, height: 10),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -269,6 +233,7 @@ class _OfflineBanner extends StatelessWidget {
         color: AppColors.ink900.withValues(alpha: 0.06),
         border: Border.all(color: AppColors.ink400.withValues(alpha: 0.3)),
         borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: AppShadow.sm,
       ),
       child: Row(
         children: [
@@ -291,7 +256,12 @@ class _NoShowBanner extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 0, 20, 14),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: AppColors.amber100, border: Border.all(color: AppColors.amberBorder), borderRadius: BorderRadius.circular(AppRadius.md)),
+      decoration: BoxDecoration(
+        color: AppColors.amber100,
+        border: Border.all(color: AppColors.amberBorder),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: AppShadow.md,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -317,9 +287,9 @@ class _NoShowBanner extends StatelessWidget {
           const SizedBox(height: 8),
           Row(
             children: [
-              AppButton(label: 'See Next Patient', small: true, onPressed: app.seeNextPatient),
+              Expanded(child: AppButton(label: 'See Next Patient', small: true, block: true, onPressed: app.seeNextPatient)),
               const SizedBox(width: 8),
-              AppButton(label: 'Dismiss', small: true, variant: AppButtonVariant.ghost, onPressed: app.dismissNoShow),
+              Expanded(child: AppButton(label: 'Dismiss', small: true, block: true, variant: AppButtonVariant.ghost, onPressed: app.dismissNoShow)),
             ],
           ),
         ],
@@ -336,9 +306,10 @@ class _QueueCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     final canNoShow = [ConsultStatus.scheduled, ConsultStatus.confirmed, ConsultStatus.waiting, ConsultStatus.inProgress].contains(patient.status);
+    final isActive = patient.status == ConsultStatus.inProgress;
+    final isUrgent = patient.priority == QueuePriority.high;
 
-    return AppCard(
-      margin: const EdgeInsets.only(bottom: 10),
+    final card = AppCard(
       padding: const EdgeInsets.all(14),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -414,6 +385,24 @@ class _QueueCard extends StatelessWidget {
         ],
       ),
     );
+
+    // Active (in-progress) and urgent patients get a soft tinted glow so
+    // they stand out from the rest of the queue at a glance, instead of
+    // relying on the status badge/priority chip alone.
+    final accent = isActive ? AppColors.orange600 : (isUrgent ? AppColors.red600 : null);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: accent == null
+          ? null
+          : BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              boxShadow: [
+                BoxShadow(color: accent.withValues(alpha: 0.16), blurRadius: 18, offset: const Offset(0, 6)),
+              ],
+            ),
+      child: card,
+    );
   }
 
   Future<void> _confirmNoShow(BuildContext context, AppState app, QueuePatient patient) async {
@@ -444,9 +433,20 @@ class _PriorityChip extends StatelessWidget {
     final bg = isHigh ? AppColors.red100 : AppColors.amber100;
     final fg = isHigh ? AppColors.red600 : AppColors.amber600;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
-      child: Text(priority.label, style: AppText.mono(size: 8, color: fg, weight: FontWeight.bold)),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: fg.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(isHigh ? Icons.priority_high_rounded : Icons.arrow_upward_rounded, size: 9, color: fg),
+          const SizedBox(width: 2),
+          Text(priority.label, style: AppText.mono(size: 8, color: fg, weight: FontWeight.bold)),
+        ],
+      ),
     );
   }
 }

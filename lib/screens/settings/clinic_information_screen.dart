@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/avatar.dart';
 
 class _Qualification {
   _Qualification({required this.degree, required this.year, required this.institution});
@@ -27,6 +29,7 @@ class _ClinicInformationScreenState extends State<ClinicInformationScreen> {
   late String gender;
   late final TextEditingController _firstNameController;
   late final TextEditingController _lastNameController;
+  late final TextEditingController _photoUrlController;
   late final TextEditingController _specialtiesController;
   late final TextEditingController _languagesController;
   late final TextEditingController _experienceController;
@@ -36,31 +39,69 @@ class _ClinicInformationScreenState extends State<ClinicInformationScreen> {
   late final TextEditingController _pincodeController;
 
   bool _saving = false;
+  bool _seededFromProfile = false;
 
-  final List<_Qualification> quals = [
-    _Qualification(degree: 'MBBS', year: '1999', institution: 'Seth GS Medical College'),
-    _Qualification(degree: 'MD (General Medicine)', year: '2003', institution: 'KEM Hospital'),
-  ];
+  List<_Qualification> quals = [];
 
   @override
   void initState() {
     super.initState();
     gender = 'Female';
-    _firstNameController = TextEditingController(text: 'Rhea');
-    _lastNameController = TextEditingController(text: 'Kulkarni');
-    _specialtiesController = TextEditingController(text: 'General Medicine, Diabetology');
-    _languagesController = TextEditingController(text: 'English, Hindi, Marathi');
-    _experienceController = TextEditingController(text: '9');
-    _addressController = TextEditingController(text: '14 Lotus Enclave, MG Road');
-    _cityController = TextEditingController(text: 'Pune');
-    _stateController = TextEditingController(text: 'Maharashtra');
-    _pincodeController = TextEditingController(text: '411001');
+    _firstNameController = TextEditingController();
+    _lastNameController = TextEditingController();
+    _photoUrlController = TextEditingController();
+    _specialtiesController = TextEditingController();
+    _languagesController = TextEditingController();
+    _experienceController = TextEditingController();
+    _addressController = TextEditingController();
+    _cityController = TextEditingController();
+    _stateController = TextEditingController();
+    _pincodeController = TextEditingController();
+    _seedFromProfile(context.read<AppState>().doctorProfile);
+    _photoUrlController.addListener(() => setState(() {}));
+  }
+
+  /// Populates every field from the real backend profile. Called once, the
+  /// first time a non-null profile is seen (at `initState` if it's already
+  /// loaded, or from `build` once `AppState.loadDoctorProfile` resolves) —
+  /// never again after, so it can't clobber an in-progress edit.
+  void _seedFromProfile(Map<String, dynamic>? profile) {
+    if (profile == null || _seededFromProfile) return;
+    _seededFromProfile = true;
+    _firstNameController.text = (profile['firstName'] as String?) ?? '';
+    _lastNameController.text = (profile['lastName'] as String?) ?? '';
+    _photoUrlController.text = (profile['profilePhoto'] as String?) ?? '';
+    final g = profile['gender'] as String?;
+    gender = g == 'male' ? 'Male' : (g == 'other' ? 'Other' : 'Female');
+    final specialties = profile['specialties'];
+    _specialtiesController.text = specialties is List ? specialties.whereType<String>().join(', ') : '';
+    final languages = profile['languages'] ?? profile['languagesSpoken'];
+    _languagesController.text = languages is List ? languages.whereType<String>().join(', ') : '';
+    final experience = profile['experienceYears'] ?? profile['yearsOfExperience'];
+    _experienceController.text = experience == null ? '' : '$experience';
+    final location = profile['location'];
+    final addressSource = location is Map ? location : profile;
+    _addressController.text = (addressSource['address'] as String?) ?? '';
+    _cityController.text = (addressSource['city'] as String?) ?? '';
+    _stateController.text = (addressSource['state'] as String?) ?? '';
+    _pincodeController.text = (addressSource['pincode']?.toString()) ?? '';
+    final rawQuals = profile['qualifications'];
+    quals = rawQuals is List && rawQuals.isNotEmpty
+        ? rawQuals.whereType<Map>().map((q) {
+            return _Qualification(
+              degree: (q['degree'] as String?) ?? '',
+              year: (q['year'] ?? q['passingYear'])?.toString() ?? '',
+              institution: (q['institution'] as String?) ?? '',
+            );
+          }).toList()
+        : [_Qualification(degree: '', year: '', institution: '')];
   }
 
   @override
   void dispose() {
     _firstNameController.dispose();
     _lastNameController.dispose();
+    _photoUrlController.dispose();
     _specialtiesController.dispose();
     _languagesController.dispose();
     _experienceController.dispose();
@@ -76,10 +117,28 @@ class _ClinicInformationScreenState extends State<ClinicInformationScreen> {
 
   Future<void> _save(AppState app) async {
     setState(() => _saving = true);
-    app.logAuditEvent('Saving clinic information via PATCH /doctors/me');
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (mounted) {
-      setState(() => _saving = false);
+    final experience = int.tryParse(_experienceController.text.trim());
+    final ok = await app.updateDoctorProfile({
+      'firstName': _firstNameController.text.trim(),
+      'lastName': _lastNameController.text.trim(),
+      'profilePhoto': _photoUrlController.text.trim(),
+      'gender': gender.toLowerCase(),
+      'specialties': _specialtiesController.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList(),
+      'languages': _languagesController.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList(),
+      if (experience != null) 'experienceYears': experience,
+      'location': {
+        'address': _addressController.text.trim(),
+        'city': _cityController.text.trim(),
+        'state': _stateController.text.trim(),
+        'pincode': _pincodeController.text.trim(),
+      },
+      'qualifications': quals.map((q) => {'degree': q.degree, 'year': q.year, 'institution': q.institution}).toList(),
+    });
+    if (!mounted) return;
+    setState(() => _saving = false);
+    // Failure already surfaced via AppState's in-app notification banner
+    // (with a friendly, non-technical message) — only confirm success here.
+    if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Clinic information saved', style: AppText.body(size: 13, color: Colors.white, weight: FontWeight.bold)), backgroundColor: AppColors.green600),
       );
@@ -89,6 +148,13 @@ class _ClinicInformationScreenState extends State<ClinicInformationScreen> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    if (!_seededFromProfile && app.doctorProfile != null) {
+      // The profile wasn't loaded yet at initState — seed once it arrives,
+      // deferred a frame so this doesn't setState mid-build.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _seedFromProfile(app.doctorProfile));
+      });
+    }
     return Scaffold(
       backgroundColor: AppColors.blue50,
       appBar: AppBar(
@@ -108,12 +174,17 @@ class _ClinicInformationScreenState extends State<ClinicInformationScreen> {
               children: [
                 const Icon(Icons.lock_outline, size: 14, color: AppColors.blue700),
                 const SizedBox(width: 6),
-                Expanded(child: Text('Your NMC registration number (${app.nmcNumber.isNotEmpty ? app.nmcNumber : 'NMC-2016-MH-08421'}) is locked and verified.', style: AppText.body(size: 11, color: AppColors.blue700))),
+                Expanded(child: Text('Your NMC registration number (${app.doctorNmcNumber}) is locked and verified.', style: AppText.body(size: 11, color: AppColors.blue700))),
               ],
             ),
           ),
           _section('Personal Details', [
+            Center(
+              child: InitialsAvatar(name: app.doctorDisplayName, size: 72, fontSize: 22, imageUrl: _photoUrlController.text.trim()),
+            ),
+            const SizedBox(height: 12),
             _row2(_labeledField('First name', _firstNameController), _labeledField('Last name', _lastNameController)),
+            _labeledField('Profile Photo URL', _photoUrlController, keyboardType: TextInputType.url),
             _labeledDropdown('Gender', gender, const ['Female', 'Male', 'Other'], (v) => setState(() => gender = v)),
           ]),
           _section('Clinical Specializations', [
@@ -234,7 +305,15 @@ class _QualRowState extends State<_QualRow> {
                 children: [
                   Expanded(child: TextField(controller: _degreeC, decoration: const InputDecoration(hintText: 'Degree'), onChanged: (v) => widget.qual.degree = v)),
                   const SizedBox(width: 10),
-                  Expanded(child: TextField(controller: _yearC, decoration: const InputDecoration(hintText: 'Year'), onChanged: (v) => widget.qual.year = v)),
+                  Expanded(
+                    child: TextField(
+                      controller: _yearC,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+                      decoration: const InputDecoration(hintText: 'Year'),
+                      onChanged: (v) => widget.qual.year = v,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -246,9 +325,9 @@ class _QualRowState extends State<_QualRow> {
             right: 0,
             child: Material(
               color: AppColors.red100,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
               child: InkWell(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(AppRadius.sm),
                 onTap: widget.onDelete,
                 child: const SizedBox(width: 26, height: 26, child: Icon(Icons.delete_outline, size: 15, color: AppColors.red600)),
               ),

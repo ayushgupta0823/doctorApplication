@@ -4,10 +4,9 @@ import 'package:provider/provider.dart';
 import 'screens/biometric_lock_screen.dart';
 import 'screens/calendar_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/login_screen.dart';
 import 'screens/more/more_menu_screen.dart';
-import 'screens/onboarding_screen.dart';
 import 'screens/patients_screen.dart';
+import 'screens/registration/registration_screen.dart';
 import 'screens/queue_screen.dart';
 import 'state/app_state.dart';
 import 'theme/app_theme.dart';
@@ -50,8 +49,7 @@ class RootShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
 
-    if (!app.isLoggedIn) return const LoginScreen();
-    if (!app.isOnboarded) return const OnboardingScreen();
+    if (!app.isOnboarded) return const RegistrationScreen();
     if (app.isAppLocked) return const BiometricLockScreen();
 
     final currentIndex = _tabs.indexOf(app.tab);
@@ -70,37 +68,62 @@ class RootShell extends StatelessWidget {
       ),
       bottomNavigationBar: SafeArea(
         top: false,
+        minimum: const EdgeInsets.fromLTRB(12, 0, 12, 10),
         child: Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.white,
-            border: Border(top: BorderSide(color: AppColors.line)),
+            borderRadius: BorderRadius.circular(AppRadius.xl),
+            boxShadow: AppShadow.md,
           ),
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 10),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: List.generate(_tabs.length, (i) {
-              final active = i == currentIndex;
-              final color = active ? AppColors.blue600 : AppColors.ink400;
-              return InkWell(
-                borderRadius: BorderRadius.circular(AppRadius.md),
-                onTap: () => context.read<AppState>().setTab(_tabs[i]),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(_icons[i], size: 21, color: color),
-                      const SizedBox(height: 3),
-                      Text(
-                        _labels[i],
-                        style: AppText.body(size: 10.5, weight: FontWeight.w600, color: color),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final slotWidth = constraints.maxWidth / _tabs.length;
+              return Stack(
+                children: [
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    left: slotWidth * currentIndex,
+                    top: 0,
+                    bottom: 0,
+                    width: slotWidth,
+                    child: Center(
+                      child: Container(
+                        width: slotWidth - 12,
+                        decoration: BoxDecoration(color: AppColors.blue100, borderRadius: BorderRadius.circular(AppRadius.lg)),
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                  Row(
+                    children: List.generate(_tabs.length, (i) {
+                      final active = i == currentIndex;
+                      final color = active ? AppColors.blue600 : AppColors.ink400;
+                      return Expanded(
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(AppRadius.lg),
+                          onTap: () => context.read<AppState>().setTab(_tabs[i]),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(_icons[i], size: 21, color: color),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _labels[i],
+                                  style: AppText.body(size: 10.5, weight: FontWeight.w600, color: color),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ],
               );
-            }),
+            },
           ),
         ),
       ),

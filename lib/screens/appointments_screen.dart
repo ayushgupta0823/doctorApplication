@@ -114,6 +114,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
     final ageController = TextEditingController();
     String gender = 'F';
     String mode = 'Consultation';
+    String error = '';
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -121,31 +122,72 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
         child: Container(
-          padding: const EdgeInsets.all(20),
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.85),
           decoration: const BoxDecoration(color: AppColors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg))),
           child: StatefulBuilder(
-            builder: (ctx, setSheetState) => Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('Add Walk-in Patient', style: AppText.display(size: 15)),
-                const SizedBox(height: 14),
-                TextField(controller: nameController, decoration: const InputDecoration(hintText: 'Patient name')),
-                const SizedBox(height: 10),
-                TextField(controller: ageController, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Age')),
-                const SizedBox(height: 14),
-                AppButton(
-                  label: 'Add to Queue',
-                  block: true,
-                  onPressed: () {
-                    final name = nameController.text.trim();
-                    final age = int.tryParse(ageController.text.trim()) ?? 0;
-                    if (name.isEmpty || age <= 0) return;
-                    app.addWalkInPatient(name: name, age: age, gender: gender, mode: mode);
-                    Navigator.pop(ctx);
-                  },
-                ),
-              ],
+            builder: (ctx, setSheetState) => SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Add Walk-in Patient', style: AppText.display(size: 15)),
+                  const SizedBox(height: 14),
+                  TextField(controller: nameController, decoration: const InputDecoration(hintText: 'Patient name')),
+                  const SizedBox(height: 10),
+                  TextField(controller: ageController, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Age')),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(value: 'F', label: Text('Female')),
+                            ButtonSegment(value: 'M', label: Text('Male')),
+                          ],
+                          selected: {gender},
+                          onSelectionChanged: (s) => setSheetState(() => gender = s.first),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    initialValue: mode,
+                    isExpanded: true,
+                    items: const [
+                      DropdownMenuItem(value: 'Consultation', child: Text('In-person Consultation')),
+                      DropdownMenuItem(value: 'Video Consultation', child: Text('Video Consultation')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setSheetState(() => mode = v);
+                    },
+                  ),
+                  if (error.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text(error, style: AppText.body(size: 11.5, color: AppColors.red600)),
+                  ],
+                  const SizedBox(height: 14),
+                  AppButton(
+                    label: 'Add to Queue',
+                    block: true,
+                    onPressed: () {
+                      final name = nameController.text.trim();
+                      final age = int.tryParse(ageController.text.trim()) ?? 0;
+                      if (name.isEmpty) {
+                        setSheetState(() => error = 'Enter the patient\'s name.');
+                        return;
+                      }
+                      if (age <= 0 || age > 120) {
+                        setSheetState(() => error = 'Enter a valid age (1-120).');
+                        return;
+                      }
+                      app.addWalkInPatient(name: name, age: age, gender: gender, mode: mode);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         ),

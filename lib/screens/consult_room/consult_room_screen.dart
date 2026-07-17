@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/app_tabs.dart';
 import '../../widgets/avatar.dart';
-import 'ai_tools_tab.dart';
 import 'consultation_history_tab.dart';
 import 'consultation_reports_tab.dart';
 import 'lab_tests_tab.dart';
@@ -15,8 +16,7 @@ import 'video_call_screen.dart';
 /// The Consultation screen: pushed from the Queue, Patient Details, or
 /// Home when a doctor starts/resumes a consult for a specific patient.
 /// Call controls live in the header (phone/video icons) rather than as a
-/// tab, matching the reference design's 5 clinical tabs: Notes,
-/// Prescription, Lab Tests, Reports, History.
+/// tab. Clinical tabs: Prescription, Lab Tests, Reports, History.
 class ConsultRoomScreen extends StatelessWidget {
   const ConsultRoomScreen({super.key});
 
@@ -68,12 +68,17 @@ class ConsultRoomScreen extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(width: 64, height: 64, decoration: const BoxDecoration(color: AppColors.blue100, shape: BoxShape.circle), child: const Icon(Icons.event_busy_outlined, size: 28, color: AppColors.blue700)),
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(color: AppColors.blue100, shape: BoxShape.circle, boxShadow: AppShadow.sm),
+                  child: const Icon(Icons.event_busy_outlined, size: 28, color: AppColors.blue700),
+                ),
                 const SizedBox(height: 16),
                 Text('No Active Consultation', style: AppText.display(size: 16)),
                 const SizedBox(height: 6),
                 Text('This consultation has already ended.', textAlign: TextAlign.center, style: AppText.body(size: 13, color: AppColors.ink600)),
-              ],
+              ].animate(interval: 60.ms).fadeIn(duration: 220.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
             ),
           ),
         ),
@@ -127,38 +132,52 @@ class ConsultRoomScreen extends StatelessWidget {
           ),
           actions: [
             if (inCall) _CallTimerChip(seconds: app.callSeconds),
-            IconButton(
+            _HeaderIconButton(
               tooltip: 'Video call',
-              icon: Icon(Icons.videocam, color: inCall ? AppColors.green600 : AppColors.ink900, size: 21),
+              icon: Icons.videocam,
+              active: inCall,
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const VideoCallScreen())),
             ),
-            IconButton(
+            _HeaderIconButton(
               tooltip: 'Finish consultation',
-              icon: const Icon(Icons.check_circle_outline, color: AppColors.green600, size: 22),
+              icon: Icons.check_circle_outline,
+              active: false,
+              iconColor: AppColors.green600,
               onPressed: () => _finishConsultation(context, app),
             ),
+            const SizedBox(width: 4),
           ],
         ),
         body: Column(
           children: [
-            SizedBox(
-              height: 34,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                children: [
-                  _SubTab(label: 'Notes', active: app.consultSubTab == ConsultSubTab.notes, onTap: () => app.setConsultSubTab(ConsultSubTab.notes)),
-                  _SubTab(label: 'Prescription', active: app.consultSubTab == ConsultSubTab.prescription, onTap: () => app.setConsultSubTab(ConsultSubTab.prescription)),
-                  _SubTab(label: 'Lab Tests', active: app.consultSubTab == ConsultSubTab.labTests, onTap: () => app.setConsultSubTab(ConsultSubTab.labTests)),
-                  _SubTab(label: 'Reports', active: app.consultSubTab == ConsultSubTab.reports, onTap: () => app.setConsultSubTab(ConsultSubTab.reports)),
-                  _SubTab(label: 'History', active: app.consultSubTab == ConsultSubTab.history, onTap: () => app.setConsultSubTab(ConsultSubTab.history)),
+            Container(
+              decoration: BoxDecoration(
+                color: AppColors.blue50,
+                border: const Border(bottom: BorderSide(color: AppColors.line)),
+              ),
+              child: AppTabBar(
+                selected: app.consultSubTab,
+                onChanged: (v) => app.setConsultSubTab(v as ConsultSubTab),
+                tabs: const [
+                  AppTab(label: 'Prescription', value: ConsultSubTab.prescription),
+                  AppTab(label: 'Lab Tests', value: ConsultSubTab.labTests),
+                  AppTab(label: 'Reports', value: ConsultSubTab.reports),
+                  AppTab(label: 'History', value: ConsultSubTab.history),
                 ],
               ),
             ),
-            const Divider(height: 1, color: AppColors.line),
             Expanded(
               child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
+                duration: const Duration(milliseconds: 220),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(begin: const Offset(0, 0.02), end: Offset.zero).animate(animation),
+                    child: child,
+                  ),
+                ),
                 child: KeyedSubtree(
                   key: ValueKey(app.consultSubTab),
                   child: SingleChildScrollView(child: _buildTab(app.consultSubTab)),
@@ -173,8 +192,6 @@ class ConsultRoomScreen extends StatelessWidget {
 
   Widget _buildTab(ConsultSubTab tab) {
     switch (tab) {
-      case ConsultSubTab.notes:
-        return const AiToolsTab();
       case ConsultSubTab.prescription:
         return const PrescriptionTab();
       case ConsultSubTab.labTests:
@@ -184,6 +201,50 @@ class ConsultRoomScreen extends StatelessWidget {
       case ConsultSubTab.history:
         return const ConsultationHistoryTab();
     }
+  }
+}
+
+/// Circular tinted icon button used in the Consult Room's app bar —
+/// gives the video-call / finish-consultation actions the same "raised
+/// chip" treatment as the rest of the design system instead of bare
+/// unstyled icons.
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.active,
+    required this.onPressed,
+    this.iconColor,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onPressed;
+  final Color? iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = iconColor ?? (active ? AppColors.green600 : AppColors.ink900);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Tooltip(
+        message: tooltip,
+        child: Material(
+          color: active ? AppColors.green100 : Colors.transparent,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onPressed,
+            child: SizedBox(
+              width: 38,
+              height: 38,
+              child: Icon(icon, color: color, size: 21),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -197,32 +258,25 @@ class _CallTimerChip extends StatelessWidget {
     final ss = (seconds % 60).toString().padLeft(2, '0');
     return Container(
       margin: const EdgeInsets.only(right: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(color: AppColors.green100, borderRadius: BorderRadius.circular(100)),
-      child: Text('$mm:$ss', style: AppText.mono(size: 11, weight: FontWeight.w700, color: AppColors.green600)),
-    );
-  }
-}
-
-class _SubTab extends StatelessWidget {
-  const _SubTab({required this.label, required this.active, required this.onTap});
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: active ? AppColors.blue600 : Colors.transparent, width: 2))),
-          alignment: Alignment.center,
-          child: Text(label, style: AppText.body(size: 12.5, weight: FontWeight.w700, color: active ? AppColors.blue700 : AppColors.ink400)),
-        ),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppColors.green100,
+        borderRadius: BorderRadius.circular(100),
+        boxShadow: AppShadow.sm,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppColors.green600, shape: BoxShape.circle))
+              .animate(onPlay: (c) => c.repeat(reverse: true))
+              .fadeIn(duration: 700.ms)
+              .then()
+              .fadeOut(duration: 700.ms),
+          const SizedBox(width: 6),
+          Text('$mm:$ss', style: AppText.mono(size: 11, weight: FontWeight.w700, color: AppColors.green600)),
+        ],
       ),
     );
   }
 }
+

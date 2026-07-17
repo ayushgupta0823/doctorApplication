@@ -233,18 +233,24 @@ class SoapNote {
       plan.isNotEmpty;
 }
 
+/// Dosage forms a doctor can pick for a prescribed medicine — mirrors the
+/// backend's `Prescription.medicines[].dosageForm` enum.
+const kDosageForms = ['tablet', 'capsule', 'syrup', 'injection', 'cream', 'drops', 'inhaler', 'other'];
+
 class Medicine {
   Medicine({
     this.name = '',
     this.dosage = '',
     this.freq = '',
     this.duration = '',
+    this.dosageForm = 'tablet',
     this.aiSuggested = false,
   });
   String name;
   String dosage;
   String freq;
   String duration;
+  String dosageForm;
   bool aiSuggested;
 }
 
@@ -268,6 +274,7 @@ class PatientHistory {
     required this.gender,
     required this.mode,
     required this.date,
+    this.createdAt,
     required this.diagnosis,
     required this.soap,
     required this.transcript,
@@ -280,6 +287,9 @@ class PatientHistory {
   final String gender;
   final String mode;
   final String date;
+  /// Full timestamp behind [date] (when known) — used to compute real
+  /// week/month trends in Reports & Analytics rather than display only.
+  final DateTime? createdAt;
   final List<String> diagnosis;
   final SoapNote soap;
   final List<TranscriptLine> transcript;
@@ -288,20 +298,6 @@ class PatientHistory {
   /// consultation, only when the doctor opens that history item) rather
   /// than eagerly for the whole list.
   Prescription? rx;
-}
-
-class RosterEntry {
-  const RosterEntry({
-    required this.time,
-    required this.name,
-    required this.mode,
-    required this.status,
-  });
-
-  final String time;
-  final String name;
-  final String mode;
-  final ConsultStatus status;
 }
 
 class PatientNote {

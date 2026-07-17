@@ -37,14 +37,50 @@ class AppColors {
   static const white = Color(0xFFFFFFFF);
 
   static const deviceBg = Color(0xFFDCE6F2);
+
+  // In-progress status is deliberately a distinct orange, not the amber
+  // used for "pending" — keep it out of the amber family so the two
+  // statuses stay visually distinguishable.
+  static const orange100 = Color(0xFFFDEBD6);
+  static const orange600 = Color(0xFFC25A00);
+
+  // Video-call "theater" surface — a dark palette used only inside the
+  // call screen, kept as named tokens instead of inline hex so it reads
+  // as intentional rather than a one-off.
+  static const callSurfaceEnd = Color(0xFF173F72);
+  static const callTextLight = Color(0xFFBFD2EC);
+  static const callIconMuted = Color(0xFF7CA3D6);
+  static const callTextMuted = Color(0xFF9FB6D9);
+  static const callSurfaceDark = Color(0xFF14243B);
+  static const callSurfaceDarker = Color(0xFF0B1E38);
 }
 
 class AppRadius {
   AppRadius._();
+  static const xs = 6.0;
   static const sm = 10.0;
   static const md = 14.0;
   static const lg = 20.0;
   static const xl = 26.0;
+}
+
+/// Soft, slightly colored elevation scale — replaces the single ad-hoc
+/// shadow that used to live inline in `AppCard` so every raised surface
+/// (cards, buttons, the bottom nav, sheets) shares one depth language.
+class AppShadow {
+  AppShadow._();
+
+  static List<BoxShadow> sm = [
+    BoxShadow(color: AppColors.blue900.withValues(alpha: 0.05), blurRadius: 4, offset: const Offset(0, 1)),
+  ];
+
+  static List<BoxShadow> md = [
+    BoxShadow(color: AppColors.blue900.withValues(alpha: 0.07), blurRadius: 12, offset: const Offset(0, 4)),
+  ];
+
+  static List<BoxShadow> lg = [
+    BoxShadow(color: AppColors.blue900.withValues(alpha: 0.10), blurRadius: 24, offset: const Offset(0, 8)),
+  ];
 }
 
 class AppText {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 
@@ -6,6 +7,26 @@ import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_button.dart';
 import '../widgets/app_card.dart';
+
+/// `local_auth` reports failures as a `PlatformException` with a machine
+/// code — map the common ones to clinical, non-technical copy instead of
+/// surfacing the raw platform error to the doctor.
+String _describeAuthError(Object e) {
+  if (e is PlatformException) {
+    switch (e.code) {
+      case 'NotAvailable':
+        return 'Biometric unlock isn\'t available on this device right now.';
+      case 'NotEnrolled':
+        return 'No fingerprint or face is enrolled on this device yet.';
+      case 'LockedOut':
+      case 'PermanentlyLockedOut':
+        return 'Too many attempts — biometric unlock is temporarily locked. Try again shortly.';
+      case 'PasscodeNotSet':
+        return 'Set a device passcode to use biometric unlock.';
+    }
+  }
+  return 'Biometric authentication failed — please try again.';
+}
 
 class BiometricLockScreen extends StatefulWidget {
   const BiometricLockScreen({super.key});
@@ -62,7 +83,7 @@ class _BiometricLockScreenState extends State<BiometricLockScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = 'Biometric authentication failed: ${e.toString()}');
+      setState(() => _error = _describeAuthError(e));
     } finally {
       if (mounted) setState(() => _authenticating = false);
     }

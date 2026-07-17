@@ -18,9 +18,7 @@ class AppCard extends StatelessWidget {
         color: AppColors.white,
         border: Border.all(color: AppColors.line),
         borderRadius: BorderRadius.circular(AppRadius.lg),
-        boxShadow: const [
-          BoxShadow(color: Color.fromRGBO(15, 27, 45, 0.06), blurRadius: 2, offset: Offset(0, 1)),
-        ],
+        boxShadow: AppShadow.sm,
       ),
       // A plain Container isn't a Material ancestor, so any ListTile/InkWell
       // placed directly inside would paint its ink splashes underneath this
@@ -52,7 +50,51 @@ class SectionTitle extends StatelessWidget {
       child: Row(
         children: [
           if (icon != null) ...[icon!, const SizedBox(width: 6)],
-          Text(text, style: AppText.display(size: 13.5)),
+          Expanded(
+            child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.display(size: 13.5)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Centered icon + message used for empty/error states across the "More"
+/// feature screens, so a bare line of text never has to stand in for a
+/// deliberately designed empty state.
+class EmptyState extends StatelessWidget {
+  const EmptyState({
+    super.key,
+    required this.icon,
+    required this.message,
+    this.iconColor = AppColors.blue700,
+    this.iconBackground = AppColors.blue100,
+    this.messageColor = AppColors.ink400,
+    this.padding = const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+  });
+
+  final IconData icon;
+  final String message;
+  final Color iconColor;
+  final Color iconBackground;
+  final Color messageColor;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: padding,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(color: iconBackground, shape: BoxShape.circle),
+            child: Icon(icon, size: 22, color: iconColor),
+          ),
+          const SizedBox(height: 12),
+          Text(message, textAlign: TextAlign.center, style: AppText.body(size: 12.5, color: messageColor)),
         ],
       ),
     );

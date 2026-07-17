@@ -103,9 +103,12 @@ class _AppButtonState extends State<AppButton> {
             child: InkWell(
               borderRadius: BorderRadius.circular(AppRadius.md),
               onTap: disabled ? null : widget.onPressed,
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: widget.small ? 10 : 14, vertical: widget.small ? 6 : 9),
-                child: child,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: widget.small ? 36 : 44),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: widget.small ? 10 : 14, vertical: widget.small ? 6 : 9),
+                  child: Center(child: child),
+                ),
               ),
             ),
           ),

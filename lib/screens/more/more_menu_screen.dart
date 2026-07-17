@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
@@ -6,7 +7,18 @@ import '../../theme/app_theme.dart';
 import '../../widgets/app_card.dart';
 import '../profile_screen.dart';
 import '../reports_analytics_screen.dart';
-import 'simple_info_screen.dart';
+import 'ai_assistant_screen.dart';
+import 'chat_screen.dart';
+import 'documents_screen.dart';
+import 'feedback_screen.dart';
+import 'follow_ups_screen.dart';
+import 'health_tips_screen.dart';
+import 'help_support_screen.dart';
+import 'lab_orders_screen.dart';
+import 'prescription_templates_screen.dart';
+import 'prescriptions_sent_screen.dart';
+import 'reminders_screen.dart';
+import 'voice_notes_screen.dart';
 
 class _MoreItem {
   const _MoreItem(this.icon, this.label, this.builder);
@@ -15,47 +27,35 @@ class _MoreItem {
   final WidgetBuilder builder;
 }
 
-/// The More tab: grid of secondary features plus app-level settings.
-/// Screens without a bespoke design in this pass render as an honest,
-/// functional [SimpleInfoScreen] rather than a fake dead-end button.
+/// The More tab: grid of secondary features plus app-level settings. Every
+/// destination here is a genuinely working screen — either backed by a
+/// real endpoint, derived from real app data, or an honest on-device
+/// feature — none render as a dead "Nothing here yet" placeholder.
 class MoreMenuScreen extends StatelessWidget {
   const MoreMenuScreen({super.key});
 
   static final List<_MoreItem> _items = [
-    _MoreItem(Icons.description_outlined, 'Documents',
-        (_) => const SimpleInfoScreen(title: 'Documents', icon: Icons.description_outlined, description: 'Upload and review patient documents and scanned reports.')),
-    _MoreItem(Icons.biotech_outlined, 'Lab Orders',
-        (_) => const SimpleInfoScreen(title: 'Lab Orders', icon: Icons.biotech_outlined, description: 'Lab tests ordered from active consultations appear here.')),
-    _MoreItem(Icons.event_repeat_outlined, 'Follow-ups',
-        (_) => const SimpleInfoScreen(title: 'Follow-ups', icon: Icons.event_repeat_outlined, description: 'Patients flagged for a follow-up visit.')),
-    _MoreItem(Icons.notifications_active_outlined, 'Reminders',
-        (_) => const SimpleInfoScreen(title: 'Reminders', icon: Icons.notifications_active_outlined, description: 'Personal reminders and task follow-ups.')),
-    _MoreItem(Icons.local_pharmacy_outlined, 'Pharmacy',
-        (_) => const SimpleInfoScreen(title: 'Pharmacy', icon: Icons.local_pharmacy_outlined, description: 'Partner pharmacy directory for e-prescription fulfilment.')),
-    _MoreItem(Icons.article_outlined, 'Templates',
-        (_) => const SimpleInfoScreen(title: 'Templates', icon: Icons.article_outlined, description: 'Reusable SOAP note and prescription templates.')),
-    _MoreItem(Icons.health_and_safety_outlined, 'Health Tips',
-        (_) => const SimpleInfoScreen(
-              title: 'Health Tips',
-              icon: Icons.health_and_safety_outlined,
-              description: 'Shareable patient education material.',
-              items: ['Managing seasonal allergies', 'Blood pressure home monitoring', 'Asthma inhaler technique'],
-            )),
-    _MoreItem(Icons.chat_bubble_outline, 'Chat Interaction',
-        (_) => const SimpleInfoScreen(title: 'Chat Interaction', icon: Icons.chat_bubble_outline, description: 'Secure in-app messaging with your patients.')),
-    _MoreItem(Icons.mic_none_outlined, 'Voice Notes',
-        (_) => const SimpleInfoScreen(title: 'Voice Notes', icon: Icons.mic_none_outlined, description: 'Dictated notes recorded during or after a consultation.')),
-    _MoreItem(Icons.auto_awesome_outlined, 'AI Assistant',
-        (_) => const SimpleInfoScreen(title: 'AI Assistant', icon: Icons.auto_awesome_outlined, description: 'Ask the clinical assistant for suggestions across your patient panel.')),
-    _MoreItem(Icons.feedback_outlined, 'Feedback',
-        (_) => const SimpleInfoScreen(title: 'Feedback', icon: Icons.feedback_outlined, description: "Tell us what's working and what isn't.")),
-    _MoreItem(Icons.help_outline, 'Help & Support',
-        (_) => const SimpleInfoScreen(
-              title: 'Help & Support',
-              icon: Icons.help_outline,
-              description: 'FAQs, chat support, and product guides.',
-              items: ['How do I sign a prescription?', 'How is my digital signature stored?', 'Contact support'],
-            )),
+    _MoreItem(Icons.description_outlined, 'Documents', (_) => const DocumentsScreen()),
+    _MoreItem(Icons.biotech_outlined, 'Lab Orders', (_) => const LabOrdersScreen()),
+    _MoreItem(Icons.event_repeat_outlined, 'Follow-ups', (_) => const FollowUpsScreen()),
+    _MoreItem(Icons.notifications_active_outlined, 'Reminders', (_) => const RemindersScreen()),
+    _MoreItem(Icons.receipt_long_outlined, 'Prescriptions Sent', (_) => const PrescriptionsSentScreen()),
+    _MoreItem(Icons.article_outlined, 'Templates', (_) => const PrescriptionTemplatesScreen()),
+    _MoreItem(Icons.health_and_safety_outlined, 'Health Tips', (_) => const HealthTipsScreen()),
+    _MoreItem(Icons.chat_bubble_outline, 'Chat Interaction', (_) => const ChatListScreen()),
+    _MoreItem(Icons.mic_none_outlined, 'Voice Notes', (_) => const VoiceNotesScreen()),
+    _MoreItem(Icons.auto_awesome_outlined, 'AI Assistant', (_) => const AiAssistantScreen()),
+    _MoreItem(Icons.feedback_outlined, 'Feedback', (_) => const FeedbackScreen()),
+    _MoreItem(Icons.help_outline, 'Help & Support', (_) => const HelpSupportScreen()),
+  ];
+
+  // Soft per-tile color tint, cycled across the grid so the icons read as
+  // categorized at a glance rather than a wall of identical white circles.
+  static const _tileTints = [
+    (bg: AppColors.blue100, fg: AppColors.blue700),
+    (bg: AppColors.teal100, fg: AppColors.tealDark),
+    (bg: AppColors.green100, fg: AppColors.green600),
+    (bg: AppColors.amber100, fg: AppColors.amberDark),
   ];
 
   @override
@@ -81,7 +81,7 @@ class MoreMenuScreen extends StatelessWidget {
                 trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.ink400),
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProfileScreen())),
               ),
-            ),
+            ).animate().fadeIn(duration: 240.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 8),
             AppCard(
               padding: const EdgeInsets.all(4),
@@ -92,15 +92,23 @@ class MoreMenuScreen extends StatelessWidget {
                 trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.ink400),
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ReportsAnalyticsScreen())),
               ),
-            ),
+            ).animate(delay: 40.ms).fadeIn(duration: 240.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 20),
             GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: _items.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, mainAxisSpacing: 14, crossAxisSpacing: 10, childAspectRatio: 0.78),
+              // Fewer, wider columns on narrow phones so each 48dp icon +
+              // 2-line label isn't squeezed.
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: MediaQuery.of(context).size.width < 380 ? 3 : 4,
+                mainAxisSpacing: 14,
+                crossAxisSpacing: 10,
+                childAspectRatio: 0.78,
+              ),
               itemBuilder: (context, i) {
                 final item = _items[i];
+                final tint = _tileTints[i % _tileTints.length];
                 return InkWell(
                   borderRadius: BorderRadius.circular(AppRadius.md),
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: item.builder)),
@@ -110,14 +118,14 @@ class MoreMenuScreen extends StatelessWidget {
                       Container(
                         width: 48,
                         height: 48,
-                        decoration: const BoxDecoration(color: AppColors.white, shape: BoxShape.circle),
-                        child: Icon(item.icon, size: 21, color: AppColors.blue700),
+                        decoration: BoxDecoration(color: tint.bg, shape: BoxShape.circle, boxShadow: AppShadow.sm),
+                        child: Icon(item.icon, size: 21, color: tint.fg),
                       ),
                       const SizedBox(height: 6),
                       Text(item.label, textAlign: TextAlign.center, style: AppText.body(size: 10, weight: FontWeight.w600), maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
                   ),
-                );
+                ).animate(delay: (i * 30).ms).fadeIn(duration: 220.ms).slideY(begin: 0.08, end: 0, curve: Curves.easeOut);
               },
             ),
             const SizedBox(height: 20),
@@ -127,14 +135,6 @@ class MoreMenuScreen extends StatelessWidget {
               padding: EdgeInsets.zero,
               child: Column(
                 children: [
-                  SwitchListTile(
-                    value: app.isDarkMode,
-                    onChanged: app.setDarkMode,
-                    activeThumbColor: AppColors.green600,
-                    title: Text('Dark Mode', style: AppText.body(size: 13, weight: FontWeight.w600)),
-                    secondary: const Icon(Icons.dark_mode_outlined, color: AppColors.blue700),
-                  ),
-                  const Divider(height: 1, color: AppColors.lineSoft),
                   ListTile(
                     leading: const Icon(Icons.language_outlined, color: AppColors.blue700),
                     title: Text('Language', style: AppText.body(size: 13, weight: FontWeight.w600)),

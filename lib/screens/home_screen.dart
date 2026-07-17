@@ -1,16 +1,30 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/avatar.dart';
 import '../widgets/notifications_dialog.dart';
 import 'appointments_screen.dart';
 import 'consult_room/consult_room_screen.dart';
 import 'profile_screen.dart';
+
+/// Time-of-day greeting, recomputed on every build so it stays honest as
+/// the clock moves — no hardcoded "Good Morning" regardless of when the
+/// doctor actually opens the app.
+String _greeting() {
+  final hour = DateTime.now().hour;
+  if (hour < 5) return 'Good Night,';
+  if (hour < 12) return 'Good Morning,';
+  if (hour < 17) return 'Good Afternoon,';
+  if (hour < 21) return 'Good Evening,';
+  return 'Good Night,';
+}
 
 /// The Home tab: a daily control-center landing view (greeting, live queue
 /// snapshot, next consultation countdown, risk alerts, quick actions, and
@@ -77,73 +91,70 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             // Header
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProfileScreen())),
-                    child: Row(
+                const AppLogoMark(size: AppLogoSize.small),
+                const SizedBox(width: 8),
+                Text('MediConnectAI', style: AppText.display(size: 13, color: AppColors.blue900)),
+                const Spacer(),
+                _AvailabilityChip(isOnline: app.isOnline, onTap: () => app.setAvailability(!app.isOnline)),
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: 'Notifications',
+                  icon: Badge(
+                    isLabelVisible: app.unreadNotificationCount > 0,
+                    label: Text('${app.unreadNotificationCount}'),
+                    child: const Icon(Icons.notifications_outlined, size: 20),
+                  ),
+                  onPressed: () => showNotificationsDialog(context, app),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProfileScreen())),
+              child: Row(
+                children: [
+                  InitialsAvatar(name: app.doctorDisplayName, size: 46, fontSize: 15, imageUrl: app.doctorProfile?['profilePhoto'] as String?),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        InitialsAvatar(name: app.doctorDisplayName, size: 46, fontSize: 15),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'Good Morning,',
-                                style: AppText.body(size: 11, color: AppColors.ink600, weight: FontWeight.w600),
-                              ),
-                              Text(
-                                app.doctorDisplayName,
-                                style: AppText.display(size: 15),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                app.doctorQualificationsLabel,
-                                style: AppText.body(size: 10, color: AppColors.ink400),
-                              ),
-                            ],
-                          ),
+                        Text(
+                          _greeting(),
+                          style: AppText.body(size: 11, color: AppColors.ink600, weight: FontWeight.w600),
+                        ),
+                        Text(
+                          app.doctorDisplayName,
+                          style: AppText.display(size: 15),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          app.doctorQualificationsLabel,
+                          style: AppText.body(size: 10, color: AppColors.ink400),
                         ),
                       ],
                     ),
                   ),
-                ),
-                Row(
-                  children: [
-                    Switch(
-                      value: app.isOnline,
-                      activeThumbColor: AppColors.green600,
-                      onChanged: app.setAvailability,
-                    ),
-                    IconButton(
-                      tooltip: 'Notifications',
-                      icon: Badge(
-                        isLabelVisible: app.unreadNotificationCount > 0,
-                        label: Text('${app.unreadNotificationCount}'),
-                        child: const Icon(Icons.notifications_outlined, size: 20),
-                      ),
-                      onPressed: () => showNotificationsDialog(context, app),
-                    ),
-                  ],
-                ),
-              ],
+                  const Icon(Icons.chevron_right, size: 18, color: AppColors.ink400),
+                ],
+              ),
             ),
             const SizedBox(height: 18),
 
             // Live queue card
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
                   colors: [AppColors.blue700, AppColors.blue900],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-                borderRadius: BorderRadius.all(Radius.circular(AppRadius.lg)),
+                borderRadius: const BorderRadius.all(Radius.circular(AppRadius.lg)),
+                boxShadow: AppShadow.md,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -194,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-            ),
+            ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 14),
 
             if (nextPatient != null) ...[
@@ -221,7 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ],
                 ),
-              ),
+              ).animate().fadeIn(delay: 60.ms, duration: 280.ms).slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
               const SizedBox(height: 14),
             ],
 
@@ -267,7 +278,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(width: 8),
                 Expanded(child: _HomeStat(label: 'Completed', value: completed, color: AppColors.green600)),
               ],
-            ),
+            ).animate().fadeIn(delay: 120.ms, duration: 280.ms).slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 20),
 
             Text('QUICK ACTIONS', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
@@ -278,7 +289,9 @@ class _HomeScreenState extends State<HomeScreen> {
               physics: const NeverScrollableScrollPhysics(),
               mainAxisSpacing: 10,
               crossAxisSpacing: 10,
-              childAspectRatio: 2.4,
+              // Taller cells on narrow phones so the 2-line label has room
+              // to wrap without feeling cramped next to the icon.
+              childAspectRatio: MediaQuery.of(context).size.width < 360 ? 1.9 : 2.4,
               children: [
                 _QuickAction(
                   icon: Icons.play_circle_outline,
@@ -304,7 +317,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: AppColors.amber600,
                   onTap: nextPatient == null ? null : () => _startOrResume(app, nextPatient),
                 ),
-              ],
+              ].animate(interval: 50.ms).fadeIn(delay: 150.ms, duration: 260.ms).slideY(begin: 0.08, end: 0, curve: Curves.easeOut),
             ),
             const SizedBox(height: 20),
 
@@ -323,8 +336,38 @@ class _HomeScreenState extends State<HomeScreen> {
                     _InsightRow(icon: Icons.check_circle_outline, text: 'No urgent flags — queue looks steady', color: AppColors.green600),
                 ],
               ),
-            ),
+            ).animate().fadeIn(delay: 220.ms, duration: 280.ms).slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AvailabilityChip extends StatelessWidget {
+  const _AvailabilityChip({required this.isOnline, required this.onTap});
+  final bool isOnline;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isOnline ? AppColors.green600 : AppColors.ink400;
+    return InkWell(
+      borderRadius: BorderRadius.circular(100),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isOnline ? AppColors.green100 : AppColors.lineSoft,
+          borderRadius: BorderRadius.circular(100),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+            const SizedBox(width: 6),
+            Text(isOnline ? 'Available' : 'Offline', style: AppText.body(size: 10.5, weight: FontWeight.w700, color: color)),
           ],
         ),
       ),
@@ -342,7 +385,12 @@ class _HomeStat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
-      decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md)),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        border: Border.all(color: AppColors.line),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: AppShadow.sm,
+      ),
       child: Column(
         children: [
           Text('$value', style: AppText.mono(size: 16, weight: FontWeight.bold, color: color)),
@@ -367,12 +415,14 @@ class _QuickAction extends StatelessWidget {
       child: Material(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(AppRadius.md),
+        elevation: 0,
+        shadowColor: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.md),
           onTap: onTap,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md)),
+            decoration: BoxDecoration(border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md), boxShadow: AppShadow.sm),
             child: Row(
               children: [
                 Icon(icon, size: 20, color: color),

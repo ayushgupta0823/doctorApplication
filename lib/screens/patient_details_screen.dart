@@ -6,8 +6,10 @@ import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_button.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_tabs.dart';
 import '../widgets/avatar.dart';
 import 'consult_room/consult_room_screen.dart';
+import 'more/chat_screen.dart';
 
 enum _DetailTab { overview, history, reports, prescriptions, notes }
 
@@ -53,10 +55,6 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
         leading: IconButton(icon: const Icon(Icons.arrow_back, color: AppColors.ink900), onPressed: () => Navigator.pop(context)),
         title: Text('Patient Details', style: AppText.display(size: 16)),
         centerTitle: true,
-        actions: [
-          IconButton(icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () {}),
-          IconButton(icon: const Icon(Icons.more_vert, size: 20), onPressed: () {}),
-        ],
       ),
       body: Column(
         children: [
@@ -91,19 +89,16 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
               ],
             ),
           ),
-          SizedBox(
-            height: 34,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              children: [
-                _TabChip(label: 'Overview', active: _tab == _DetailTab.overview, onTap: () => setState(() => _tab = _DetailTab.overview)),
-                _TabChip(label: 'History', active: _tab == _DetailTab.history, onTap: () => setState(() => _tab = _DetailTab.history)),
-                _TabChip(label: 'Reports', active: _tab == _DetailTab.reports, onTap: () => setState(() => _tab = _DetailTab.reports)),
-                _TabChip(label: 'Prescriptions', active: _tab == _DetailTab.prescriptions, onTap: () => setState(() => _tab = _DetailTab.prescriptions)),
-                _TabChip(label: 'Notes', active: _tab == _DetailTab.notes, onTap: () => setState(() => _tab = _DetailTab.notes)),
-              ],
-            ),
+          AppTabBar(
+            selected: _tab,
+            onChanged: (v) => setState(() => _tab = v as _DetailTab),
+            tabs: const [
+              AppTab(label: 'Overview', value: _DetailTab.overview),
+              AppTab(label: 'History', value: _DetailTab.history),
+              AppTab(label: 'Reports', value: _DetailTab.reports),
+              AppTab(label: 'Prescriptions', value: _DetailTab.prescriptions),
+              AppTab(label: 'Notes', value: _DetailTab.notes),
+            ],
           ),
           const Divider(height: 1, color: AppColors.line),
           Expanded(
@@ -144,9 +139,16 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                         variant: AppButtonVariant.ghost,
                         icon: const Icon(Icons.chat_bubble_outline, size: 15),
                         onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Messaging ${patient.name}...'), backgroundColor: AppColors.blue700),
-                          );
+                          final consultationId = patient.consultationId;
+                          if (consultationId == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('${patient.name} has no consultation on record yet to message about.'), backgroundColor: AppColors.ink600),
+                            );
+                            return;
+                          }
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => ChatThreadScreen(consultationId: consultationId, patientName: patient.name),
+                          ));
                         },
                       ),
                     ),
@@ -174,29 +176,6 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
       case _DetailTab.notes:
         return _NotesTab(patient: patient, controller: _noteController);
     }
-  }
-}
-
-class _TabChip extends StatelessWidget {
-  const _TabChip({required this.label, required this.active, required this.onTap});
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: active ? AppColors.blue600 : Colors.transparent, width: 2))),
-          alignment: Alignment.center,
-          child: Text(label, style: AppText.body(size: 12.5, weight: FontWeight.w700, color: active ? AppColors.blue700 : AppColors.ink400)),
-        ),
-      ),
-    );
   }
 }
 
@@ -343,8 +322,19 @@ class _HistoryTab extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Expanded(child: Text(r.date, style: AppText.body(size: 12, weight: FontWeight.bold, color: AppColors.blue700))),
-                  if (r.diagnosis.isNotEmpty) Text(r.diagnosis.first, style: AppText.body(size: 11, color: AppColors.ink600)),
+                  Text(r.date, style: AppText.body(size: 12, weight: FontWeight.bold, color: AppColors.blue700)),
+                  if (r.diagnosis.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        r.diagnosis.first,
+                        textAlign: TextAlign.end,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.body(size: 11, color: AppColors.ink600),
+                      ),
+                    ),
+                  ],
                 ],
               ),
               if (r.soap.assessment.isNotEmpty) ...[

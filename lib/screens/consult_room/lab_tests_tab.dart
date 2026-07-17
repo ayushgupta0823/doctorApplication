@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
@@ -33,13 +34,18 @@ class LabTestsTab extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.biotech_outlined, size: 18, color: AppColors.ink900),
-              const SizedBox(width: 6),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(color: AppColors.blue100, borderRadius: BorderRadius.circular(AppRadius.sm)),
+                child: const Icon(Icons.biotech_outlined, size: 16, color: AppColors.blue700),
+              ),
+              const SizedBox(width: 8),
               Text('Lab Tests', style: AppText.display(size: 13.5)),
             ],
           ),
-          const SizedBox(height: 14),
-          Text('ORDER A TEST', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          Text('ORDER A TEST', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold).copyWith(letterSpacing: .3)),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -49,37 +55,57 @@ class LabTestsTab extends StatelessWidget {
                       label: Text(t, style: AppText.body(size: 11)),
                       avatar: const Icon(Icons.add, size: 14, color: AppColors.blue600),
                       backgroundColor: AppColors.white,
-                      side: const BorderSide(color: AppColors.line),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100), side: const BorderSide(color: AppColors.line)),
                       onPressed: () => app.orderLabTest(patient.id, t),
                     ))
                 .toList(),
           ),
-          const SizedBox(height: 20),
-          Text('ORDERED TESTS', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
+          const SizedBox(height: 22),
+          Text('ORDERED TESTS', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold).copyWith(letterSpacing: .3)),
           const SizedBox(height: 8),
           if (orders.isEmpty)
             AppCard(
               padding: const EdgeInsets.all(16),
-              child: Text('No lab tests ordered for this consultation yet.', style: AppText.body(size: 12.5, color: AppColors.ink400)),
+              child: Row(
+                children: [
+                  const Icon(Icons.science_outlined, size: 18, color: AppColors.ink400),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text('No lab tests ordered for this consultation yet.', style: AppText.body(size: 12.5, color: AppColors.ink400)),
+                  ),
+                ],
+              ),
             )
           else
-            ...orders.map((o) => Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md)),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.science_outlined, size: 16, color: AppColors.amber600),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(o.name, style: AppText.body(size: 12.5))),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(color: AppColors.amber100, borderRadius: BorderRadius.circular(100)),
-                        child: Text(o.status, style: AppText.body(size: 10, weight: FontWeight.w700, color: AppColors.amber600)),
-                      ),
-                    ],
-                  ),
-                )),
+            for (var i = 0; i < orders.length; i++)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.white,
+                  border: Border.all(color: AppColors.line),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  boxShadow: AppShadow.sm,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(color: AppColors.amber100, borderRadius: BorderRadius.circular(AppRadius.sm)),
+                      child: const Icon(Icons.science_outlined, size: 15, color: AppColors.amber600),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(orders[i].name, style: AppText.body(size: 12.5, weight: FontWeight.w600))),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(color: AppColors.amber100, borderRadius: BorderRadius.circular(100)),
+                      child: Text(orders[i].status, style: AppText.body(size: 10, weight: FontWeight.w700, color: AppColors.amber600)),
+                    ),
+                  ],
+                ),
+              ).animate(delay: (i * 40).ms).fadeIn(duration: 220.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
         ],
       ),
     );

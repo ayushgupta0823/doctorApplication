@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_button.dart';
+import '../widgets/app_card.dart';
 import '../widgets/status_badge.dart';
 import 'consult_room/consult_room_screen.dart';
 
 const _weekdayShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const _weekdayLong = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const _monthNames = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
@@ -31,12 +34,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   void initState() {
     super.initState();
-    final today = DateTime(2026, 7, 1); // matches the rest of the app's "Today"
+    final today = DateTime.now();
     _selectedDay = today;
     _weekStart = today.subtract(Duration(days: today.weekday - 1));
   }
 
-  bool get _isToday => _isSameDay(_selectedDay, DateTime(2026, 7, 1));
+  bool get _isToday => _isSameDay(_selectedDay, DateTime.now());
 
   bool _isSameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
 
@@ -81,7 +84,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   IconButton(icon: const Icon(Icons.chevron_left), onPressed: () => _shiftWeek(-1)),
-                  Text('${_monthNames[_weekStart.month - 1]} ${_weekStart.year}', style: AppText.display(size: 14)),
+                  Flexible(
+                    child: Text(
+                      '${_monthNames[_weekStart.month - 1]} ${_weekStart.year}',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppText.display(size: 14),
+                    ),
+                  ),
                   IconButton(icon: const Icon(Icons.chevron_right), onPressed: () => _shiftWeek(1)),
                 ],
               ),
@@ -95,7 +106,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 itemBuilder: (context, i) {
                   final day = _weekStart.add(Duration(days: i));
                   final selected = _isSameDay(day, _selectedDay);
-                  final isRealToday = _isSameDay(day, DateTime(2026, 7, 1));
+                  final isRealToday = _isSameDay(day, DateTime.now());
                   return GestureDetector(
                     onTap: () => setState(() => _selectedDay = day),
                     child: AnimatedContainer(
@@ -106,6 +117,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         color: selected ? AppColors.blue600 : AppColors.white,
                         border: Border.all(color: selected ? AppColors.blue600 : (isRealToday ? AppColors.blue500 : AppColors.line)),
                         borderRadius: BorderRadius.circular(AppRadius.md),
+                        boxShadow: selected ? AppShadow.md : AppShadow.sm,
                       ),
                       alignment: Alignment.center,
                       child: Column(
@@ -126,23 +138,44 @@ class _CalendarScreenState extends State<CalendarScreen> {
               child: !_isToday
                   ? Center(
                       child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'No schedule data available for this day yet — only today\'s roster is live in this demo.',
-                          textAlign: TextAlign.center,
-                          style: AppText.body(size: 12.5, color: AppColors.ink400),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: AppCard(
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 56,
+                                height: 56,
+                                decoration: const BoxDecoration(color: AppColors.blue100, shape: BoxShape.circle),
+                                child: const Icon(Icons.event_busy_outlined, size: 24, color: AppColors.blue700),
+                              ),
+                              const SizedBox(height: 16),
+                              Text('No Schedule Data', style: AppText.display(size: 15.5)),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Only today\'s roster is live in this demo — other days will show real appointments once historical data is wired up.',
+                                textAlign: TextAlign.center,
+                                style: AppText.body(size: 12.5, color: AppColors.ink600),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
+                      ).animate().fadeIn(duration: 220.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
                     )
                   : ListView(
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
                       children: [
                         Text(
-                          '${_weekdayShort[_selectedDay.weekday - 1] == 'Wed' ? 'Wednesday' : _weekdayShort[_selectedDay.weekday - 1]}, ${_selectedDay.day} ${_monthNames[_selectedDay.month - 1]} ${_selectedDay.year}',
+                          '${_weekdayLong[_selectedDay.weekday - 1]}, ${_selectedDay.day} ${_monthNames[_selectedDay.month - 1]} ${_selectedDay.year}',
                           style: AppText.display(size: 13, color: AppColors.blue700),
                         ),
                         const SizedBox(height: 10),
-                        ...sorted.map((p) => _ScheduleRow(patient: p)),
+                        for (var i = 0; i < sorted.length; i++)
+                          _ScheduleRow(patient: sorted[i])
+                              .animate(delay: (i * 40).ms)
+                              .fadeIn(duration: 220.ms)
+                              .slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
                         const SizedBox(height: 16),
                         Text('DAY SUMMARY', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
                         const SizedBox(height: 8),
@@ -156,7 +189,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                             const SizedBox(width: 8),
                             Expanded(child: _SummaryStat(label: 'Upcoming', value: upcoming, color: AppColors.amber600)),
                           ],
-                        ),
+                        ).animate().fadeIn(delay: 120.ms, duration: 280.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
                       ],
                     ),
             ),
@@ -191,10 +224,19 @@ class _ScheduleRow extends StatelessWidget {
       action = StatusBadge(status: patient.status);
     }
 
+    // In-progress entries get the same warm accent treatment as the Queue
+    // tab so an active consultation stands out on the day's schedule.
+    final isActive = patient.status == ConsultStatus.inProgress;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md)),
+      decoration: BoxDecoration(
+        color: isActive ? AppColors.orange100.withValues(alpha: 0.35) : AppColors.white,
+        border: Border.all(color: isActive ? AppColors.orange600.withValues(alpha: 0.35) : AppColors.line),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: isActive ? AppShadow.md : AppShadow.sm,
+      ),
       child: Row(
         children: [
           SizedBox(width: 62, child: Text(patient.time, style: AppText.mono(size: 11, weight: FontWeight.w700, color: AppColors.blue700))),
@@ -223,11 +265,17 @@ class _SummaryStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-      decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md)),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(color.withValues(alpha: 0.05), AppColors.white),
+        border: Border.all(color: AppColors.line),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: AppShadow.sm,
+      ),
       child: Column(
         children: [
-          Text('$value', style: AppText.mono(size: 16, weight: FontWeight.bold, color: color)),
+          Text('$value', style: AppText.mono(size: 17, weight: FontWeight.bold, color: color)),
+          const SizedBox(height: 2),
           Text(label, style: AppText.body(size: 9, color: AppColors.ink600, weight: FontWeight.bold), textAlign: TextAlign.center),
         ],
       ),

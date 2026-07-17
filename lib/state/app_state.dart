@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
@@ -12,7 +13,7 @@ import '../models/models.dart';
 
 enum RootTab { home, queue, patients, calendar, more }
 
-enum ConsultSubTab { notes, prescription, labTests, reports, history }
+enum ConsultSubTab { prescription, labTests, reports, history }
 
 /// Central app state managing all authentication, onboarding, dashboard,
 /// queue, WebRTC call, AI scribe, prescription signing, roster, and compliance logic.
@@ -33,7 +34,8 @@ class AppState extends ChangeNotifier {
     // timestamp from local storage so a killed app reopened offline still
     // shows real (not blank) data.
     hydrateQueueCache();
-    hydrateSettingsCache();
+    hydrateSignatureCache();
+    hydrateConsultationPreferences();
     // Fire-and-forget: replace the mock seed above with real data. If these
     // fail (no dev auth token configured, network down), the mock/cached
     // data above stays on screen rather than leaving a blank UI — see
@@ -47,7 +49,17 @@ class AppState extends ChangeNotifier {
   // ---- connectivity & offline cache ----
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   bool isOffline = false;
+
+  /// Surfaces a fast, clear "you're offline" message instead of letting an
+  /// action hang until the dio request eventually times out. Returns true
+  /// (and pushes a notification) when the action should be skipped.
+  bool _blockIfOffline(String actionDescription) {
+    if (!isOffline) return false;
+    _pushNotification("You're offline — $actionDescription will sync once you're back online.");
+    return true;
+  }
 
   void _initConnectivity() {
     _connectivity.checkConnectivity().then((result) {
@@ -113,8 +125,6 @@ class AppState extends ChangeNotifier {
   // ---- authentication & onboarding (still mocked — see ApiConfig) ----
   bool isLoggedIn = false;
   bool isOnboarded = false;
-  String phoneOrEmail = '';
-  String otpCode = '';
   String nmcNumber = '';
   bool isNmcVerified = false;
   String digitalSignature = '';
@@ -123,14 +133,44 @@ class AppState extends ChangeNotifier {
   bool isOnline = true;
   bool isAppLocked = false;
 
+  // ---- doctor registration wizard (Welcome -> Doctor Registration) ----
+  String regFirstName = '';
+  String regMiddleName = '';
+  String regLastName = '';
+  DateTime? regDateOfBirth;
+  String regGender = '';
+  String regContactPhone = '';
+  String regOfficialEmail = '';
+  int regExperienceYears = 0;
+  List<String> regSpecialties = [];
+  List<Map<String, String>> regQualifications = [];
+  List<String> regLanguages = [];
+  String regClinicLocation = '';
+  String regState = '';
+  String regCity = '';
+  String regPincode = '';
+  double regVideoFee = 500;
+  double regInPersonFee = 500;
+  String? regNmcCertificateFile;
+  String? regGovIdFile;
+  String? regDegreeCertificateFile;
+
   // ---- real doctor profile (GET /doctors/me/profile) ----
   Map<String, dynamic>? doctorProfile;
 
+  /// `doctorProfile` (real backend name) → `digitalSignature` (the name the
+  /// doctor typed during onboarding's "Configure Digital Signature" step,
+  /// stored locally) → a plain, honest "Doctor" placeholder. Never fabricates
+  /// a fictitious name when neither is available yet.
   String get doctorDisplayName {
     final p = doctorProfile;
-    if (p == null) return 'Dr. Rhea Kulkarni'; // placeholder until the profile loads
-    final name = _fullName(p);
-    return name.isEmpty ? 'Doctor' : 'Dr. $name';
+    if (p != null) {
+      final name = _fullName(p);
+      if (name.isNotEmpty) return 'Dr. $name';
+    }
+    final sig = digitalSignature.trim();
+    if (sig.isNotEmpty) return sig.startsWith('Dr') ? sig : 'Dr. $sig';
+    return 'Doctor';
   }
 
   /// Real NMC number when the profile has loaded, else whatever was entered
@@ -159,9 +199,66 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// `PUT /doctors/me/profile` — merges [patch] into the real profile on
+  /// success (so the UI reflects exactly what the server accepted) and
+  /// returns whether it succeeded; callers show their own success/error UI.
+  Future<bool> updateDoctorProfile(Map<String, dynamic> patch) async {
+    if (_blockIfOffline('Saving your profile')) return false;
+    try {
+      doctorProfile = await Api.doctors.updateMyProfile(patch);
+      logAuditEvent('Doctor profile updated');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      final message = _describeError(e);
+      logAuditEvent('Doctor profile update failed: $message');
+      _pushNotification('Could not save your profile — $message');
+      return false;
+    }
+  }
+
+  // ---- working hours (GET/PUT /doctors/me/availability) ----
+  static const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+  Map<String, dynamic>? doctorAvailability;
+  bool isLoadingAvailability = false;
+
+  /// Lazily loaded — only fetched when the doctor actually opens Working
+  /// Hours, not eagerly at app start like `doctorProfile`.
+  Future<void> loadAvailability() async {
+    isLoadingAvailability = true;
+    notifyListeners();
+    try {
+      doctorAvailability = await Api.doctors.getMyAvailability();
+    } catch (e) {
+      logAuditEvent('Availability load failed: ${_describeError(e)}');
+      _pushNotification('Could not load your working hours — ${_describeError(e)}');
+    } finally {
+      isLoadingAvailability = false;
+      notifyListeners();
+    }
+  }
+
+  /// [weeklySchedule] maps each of [weekdays] to a list of `{start, end}`
+  /// (24h `HH:mm`) slot maps — an empty list means "closed that day".
+  Future<bool> saveAvailability(Map<String, List<Map<String, String>>> weeklySchedule) async {
+    if (_blockIfOffline('Saving your working hours')) return false;
+    try {
+      doctorAvailability = await Api.doctors.setMyAvailability({'weeklySchedule': weeklySchedule});
+      logAuditEvent('Working hours updated');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      final message = _describeError(e);
+      logAuditEvent('Working hours update failed: $message');
+      _pushNotification('Could not save your working hours — $message');
+      return false;
+    }
+  }
+
   // ---- navigation ----
   RootTab tab = RootTab.home;
-  ConsultSubTab consultSubTab = ConsultSubTab.notes;
+  ConsultSubTab consultSubTab = ConsultSubTab.prescription;
 
   // ---- queue ----
   late List<QueuePatient> queue;
@@ -185,18 +282,15 @@ class AppState extends ChangeNotifier {
   bool screenSharing = false;
   bool simulatePoorNetworkMode = false;
 
-  // ---- AI scribe ----
-  bool aiGenerating = false;
-  bool aiGenerated = false;
+  // ---- Clinical documentation (populated from backend on resume; no live editor UI) ----
   SoapNote soap = SoapNote();
-  String aiSummary = '';
-  String? aiError;
-  String icdQuery = '';
   IcdCode? selectedIcd;
   List<TranscriptLine> activeTranscript = [];
   bool aiPrescriptionLoading = false;
 
   // ---- prescription ----
+  static const kDefaultFollowUpPrefKey = 'consultation_settings.default_follow_up';
+  String _defaultFollowUpPreference = '7 Days';
   List<Medicine> rxMedicines = [Medicine()];
   String rxNotes = '';
   String followUp = '7 Days';
@@ -206,6 +300,15 @@ class AppState extends ChangeNotifier {
   String rxError = '';
   int signingStep = 0; // 0: none, 1: POST draft, 2: Approve PDF, 3: Complete Appt
   String signedPdfUrl = '';
+  // Set once step 1 (create draft) succeeds so a retry after a step 2/3
+  // failure re-uses the already-created prescription instead of creating a
+  // duplicate. Cleared on final success or when the consult draft resets.
+  String? _pendingPrescriptionId;
+  // True when the prescription itself was signed successfully but the final
+  // "mark consultation complete" sync step failed — surfaced on the signed
+  // screen so the doctor knows to check the queue rather than assuming
+  // everything finished cleanly.
+  bool consultationCompletionFailed = false;
 
   // ---- patients history ----
   String? selectedHistoryId;
@@ -266,42 +369,79 @@ class AppState extends ChangeNotifier {
     return e.toString();
   }
 
+  /// Public entry point for screens that catch their own errors (e.g. a
+  /// local PDF-open failure) and need the same friendly, non-technical
+  /// copy this class already uses for its own audit log / notifications.
+  String describeError(Object e) => _describeError(e);
+
   void _pushNotification(String text) {
     inAppNotifications.insert(0, text);
     notifyListeners();
   }
 
-  // ---- authentication actions (mocked — see ApiConfig doc comment) ----
-  void sendOtp(String input) {
-    phoneOrEmail = input;
-    otpCode = '1234'; // Simulated OTP
-    logAuditEvent('OTP sent to $input');
-    notifyListeners();
-  }
+  // ---- doctor registration wizard (mocked — see ApiConfig doc comment) ----
+  /// Called once from the final "Submit Application" step of
+  /// [DoctorRegistrationScreen]. Stores every field collected across the
+  /// 4 steps, derives [digitalSignature] from the typed name (mirroring the
+  /// old "type your name as signature" onboarding step), and flips the app
+  /// straight into the logged-in + onboarded state — there is no separate
+  /// login step in this flow.
+  void completeRegistration({
+    required String firstName,
+    required String middleName,
+    required String lastName,
+    required DateTime? dateOfBirth,
+    required String gender,
+    required String contactPhone,
+    required String officialEmail,
+    required String nmcRegistrationNumber,
+    required int experienceYears,
+    required List<String> specialties,
+    required List<Map<String, String>> qualifications,
+    required List<String> languages,
+    required String clinicLocation,
+    required String state,
+    required String city,
+    required String pincode,
+    required double videoFee,
+    required double inPersonFee,
+    required String? nmcCertificateFile,
+    required String? govIdFile,
+    required String? degreeCertificateFile,
+  }) {
+    regFirstName = firstName;
+    regMiddleName = middleName;
+    regLastName = lastName;
+    regDateOfBirth = dateOfBirth;
+    regGender = gender;
+    regContactPhone = contactPhone;
+    regOfficialEmail = officialEmail;
+    nmcNumber = nmcRegistrationNumber;
+    regExperienceYears = experienceYears;
+    regSpecialties = specialties;
+    regQualifications = qualifications;
+    regLanguages = languages;
+    regClinicLocation = clinicLocation;
+    regState = state;
+    regCity = city;
+    regPincode = pincode;
+    regVideoFee = videoFee;
+    regInPersonFee = inPersonFee;
+    regNmcCertificateFile = nmcCertificateFile;
+    regGovIdFile = govIdFile;
+    regDegreeCertificateFile = degreeCertificateFile;
 
-  bool verifyOtp(String enteredOtp) {
-    if (enteredOtp == otpCode || enteredOtp == '1234') {
-      isLoggedIn = true;
-      logAuditEvent('User logged in via OTP');
-      notifyListeners();
-      return true;
-    }
-    return false;
-  }
-
-  Future<void> verifyNmc(String number) async {
-    nmcNumber = number;
-    // Simulate API call
-    await Future.delayed(const Duration(milliseconds: 600));
+    final fullName = [firstName, middleName, lastName].where((s) => s.trim().isNotEmpty).join(' ');
+    digitalSignature = fullName;
     isNmcVerified = true;
-    logAuditEvent('NMC $number verified');
+    isLoggedIn = true;
+    isOnboarded = true;
+    logAuditEvent('Doctor registration submitted for $fullName');
     notifyListeners();
-  }
-
-  void saveSignature(String sig) {
-    digitalSignature = sig;
-    logAuditEvent('Digital signature configured: $sig');
-    notifyListeners();
+    unawaited(_secureStorage.write(key: _kSignatureKey, value: fullName).catchError((_) {
+      // Best-effort; the signature still works for this session even if
+      // secure storage is unavailable, it just won't survive a restart.
+    }));
   }
 
   void grantNotificationPermission() {
@@ -343,17 +483,36 @@ class AppState extends ChangeNotifier {
   void logout() {
     isLoggedIn = false;
     isOnboarded = false;
-    phoneOrEmail = '';
-    otpCode = '';
     nmcNumber = '';
     isNmcVerified = false;
     digitalSignature = '';
     notificationsGranted = false;
     cameraMicGranted = false;
     isAppLocked = false;
+    regFirstName = '';
+    regMiddleName = '';
+    regLastName = '';
+    regDateOfBirth = null;
+    regGender = '';
+    regContactPhone = '';
+    regOfficialEmail = '';
+    regExperienceYears = 0;
+    regSpecialties = [];
+    regQualifications = [];
+    regLanguages = [];
+    regClinicLocation = '';
+    regState = '';
+    regCity = '';
+    regPincode = '';
+    regVideoFee = 500;
+    regInPersonFee = 500;
+    regNmcCertificateFile = null;
+    regGovIdFile = null;
+    regDegreeCertificateFile = null;
     _resetConsultDraft();
     logAuditEvent('User logged out');
     notifyListeners();
+    unawaited(_secureStorage.delete(key: _kSignatureKey).catchError((_) {}));
   }
 
   void logAuditEvent(String action) {
@@ -407,17 +566,28 @@ class AppState extends ChangeNotifier {
     });
   }
 
+  /// Appointment ids with a queue action (confirm/start/no-show/complete)
+  /// currently syncing to the server. [refreshQueue] preserves the local
+  /// entry for these instead of overwriting it with a possibly-stale server
+  /// snapshot fetched mid-sync.
+  final Set<String> _pendingSyncIds = {};
+
   /// `GET /appointments/doctor` → today's queue. Local walk-ins (added via
   /// [addWalkInPatient], which have no backend appointment) survive a
   /// refresh; everything else is replaced wholesale by the server's view.
   Future<void> refreshQueue() async {
+    if (_blockIfOffline('Refreshing the queue')) return;
     isLoadingQueue = true;
     notifyListeners();
     try {
       final raw = await Api.appointments.listForDoctor();
       final mapped = raw.map(_mapAppointmentToQueuePatient).toList();
       final walkIns = queue.where((p) => p.isWalkIn).toList();
-      queue = [...mapped, ...walkIns];
+      final pending = {for (final p in queue) if (_pendingSyncIds.contains(p.id)) p.id: p};
+      queue = [
+        for (final p in mapped) pending[p.id] ?? p,
+        ...walkIns,
+      ];
       lastUpdatedQueue = DateTime.now();
       sortQueue();
       logAuditEvent('Queue refreshed from server');
@@ -447,11 +617,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     unawaited(_persistQueueSnapshot());
 
+    _pendingSyncIds.add(id);
     unawaited(Api.appointments.confirm(id).catchError((e) {
       logAuditEvent('Confirm failed to sync: ${_describeError(e)}');
       _pushNotification('Could not sync confirmation with the server — ${_describeError(e)}');
       return <String, dynamic>{};
-    }));
+    }).whenComplete(() => _pendingSyncIds.remove(id)));
   }
 
   /// Prepares state for a brand-new consultation. Navigation into the
@@ -464,12 +635,13 @@ class AppState extends ChangeNotifier {
     if (p == null) return;
     p.status = ConsultStatus.inProgress;
     activePatientId = id;
-    consultSubTab = ConsultSubTab.notes;
+    consultSubTab = ConsultSubTab.prescription;
     logAuditEvent('Consultation started for patient $id');
     sortQueue();
     notifyListeners();
     unawaited(_persistQueueSnapshot());
 
+    _pendingSyncIds.add(id);
     unawaited(() async {
       try {
         final result = await Api.appointments.start(id);
@@ -484,15 +656,21 @@ class AppState extends ChangeNotifier {
         // rather than silently on each subsequent action.
         logAuditEvent('Failed to start consultation on server: ${_describeError(e)}');
         _pushNotification('Could not start consultation on the server — ${_describeError(e)}');
+      } finally {
+        _pendingSyncIds.remove(id);
       }
     }());
   }
 
   void resumeConsult(String id) {
+    _resetConsultDraft();
+    final p = _findQueue(id);
+    if (p == null) return;
     activePatientId = id;
+    consultSubTab = ConsultSubTab.prescription;
     logAuditEvent('Consultation resumed for patient $id');
     notifyListeners();
-    final consultationId = _findQueue(id)?.consultationId;
+    final consultationId = p.consultationId;
     if (consultationId != null) {
       unawaited(_hydrateConsultation(consultationId));
     }
@@ -518,7 +696,6 @@ class AppState extends ChangeNotifier {
           assessmentSource: isDoctor ? 'doctor' : 'ai',
           planSource: isDoctor ? 'doctor' : 'ai',
         );
-        aiGenerated = soap.hasContent;
       }
       final diagnosis = c['diagnosis'];
       if (diagnosis is List && diagnosis.isNotEmpty && diagnosis.first is Map) {
@@ -541,12 +718,15 @@ class AppState extends ChangeNotifier {
 
   /// Completes the current consultation: pushes the SOAP note (if the
   /// doctor wrote one) then marks the appointment complete — which cascades
-  /// to marking the linked consultation complete server-side too.
-  Future<void> completeConsultation() async {
+  /// to marking the linked consultation complete server-side too. Returns
+  /// whether the server sync actually succeeded, so callers (e.g.
+  /// [approveAndSign]) can tell a real completion apart from one that only
+  /// happened locally.
+  Future<bool> completeConsultation() async {
     if (rtcState != 'disconnected') endCall();
     final id = activePatientId;
     final p = id == null ? null : _findQueue(id);
-    if (p == null || id == null) return;
+    if (p == null || id == null) return false;
     final consultationId = p.consultationId;
     p.status = ConsultStatus.completed;
     logAuditEvent('Consultation completed for patient $id');
@@ -554,6 +734,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     unawaited(_persistQueueSnapshot());
 
+    _pendingSyncIds.add(id);
     try {
       if (consultationId != null && soap.hasContent) {
         await Api.consultations.updateSoap(
@@ -565,9 +746,13 @@ class AppState extends ChangeNotifier {
         );
       }
       await Api.appointments.complete(id);
+      return true;
     } catch (e) {
       logAuditEvent('Complete failed to sync: ${_describeError(e)}');
       _pushNotification('Could not sync completion with the server — ${_describeError(e)}');
+      return false;
+    } finally {
+      _pendingSyncIds.remove(id);
     }
   }
 
@@ -592,10 +777,11 @@ class AppState extends ChangeNotifier {
     sortQueue();
     notifyListeners();
 
+    _pendingSyncIds.add(id);
     unawaited(Api.appointments.markNoShow(id).catchError((e) {
       logAuditEvent('No-show failed to sync: ${_describeError(e)}');
       _pushNotification('Could not sync no-show with the server — ${_describeError(e)}');
-    }));
+    }).whenComplete(() => _pendingSyncIds.remove(id)));
   }
 
   void seeNextPatient() {
@@ -618,13 +804,6 @@ class AppState extends ChangeNotifier {
   QueuePatient? _findQueue(String id) {
     for (final p in queue) {
       if (p.id == id) return p;
-    }
-    return null;
-  }
-
-  QueuePatient? findQueueByName(String name) {
-    for (final p in queue) {
-      if (p.name == name) return p;
     }
     return null;
   }
@@ -689,29 +868,47 @@ class AppState extends ChangeNotifier {
   }
 
   // ---- app settings ----
-  bool isDarkMode = false;
   String selectedLanguage = 'English';
-
-  Future<void> setDarkMode(bool value) async {
-    isDarkMode = value;
-    notifyListeners();
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('dark_mode', value);
-    } catch (_) {}
-  }
 
   void setLanguage(String value) {
     selectedLanguage = value;
     notifyListeners();
   }
 
-  Future<void> hydrateSettingsCache() async {
+  static const _kSignatureKey = 'digital_signature';
+
+  /// Restores the doctor's digital signature from secure, encrypted-at-rest
+  /// storage (Android Keystore / iOS Keychain via `flutter_secure_storage`)
+  /// so it survives an app restart — matching what onboarding tells the
+  /// doctor ("stored securely on your device").
+  Future<void> hydrateSignatureCache() async {
+    try {
+      final saved = await _secureStorage.read(key: _kSignatureKey);
+      if (saved != null && saved.isNotEmpty) {
+        digitalSignature = saved;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Secure storage unavailable (e.g. widget tests) — signature will be
+      // re-entered via onboarding instead.
+    }
+  }
+
+  /// Loads the doctor's saved default follow-up period (Profile ›
+  /// Consultation Settings) so new prescriptions start from their real
+  /// preference instead of an app-wide hardcoded '7 Days'.
+  Future<void> hydrateConsultationPreferences() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      isDarkMode = prefs.getBool('dark_mode') ?? false;
-      notifyListeners();
-    } catch (_) {}
+      final saved = prefs.getString(kDefaultFollowUpPrefKey);
+      if (saved != null && saved.isNotEmpty) {
+        _defaultFollowUpPreference = saved;
+        followUp = saved;
+        notifyListeners();
+      }
+    } catch (_) {
+      // No preference saved yet, or platform channel unavailable.
+    }
   }
 
   void _resetConsultDraft() {
@@ -724,22 +921,19 @@ class AppState extends ChangeNotifier {
     audioMuted = false;
     videoMuted = false;
     screenSharing = false;
-    aiGenerating = false;
-    aiGenerated = false;
-    aiError = null;
     aiPrescriptionLoading = false;
     soap = SoapNote();
-    aiSummary = '';
-    icdQuery = '';
     selectedIcd = null;
     rxMedicines = [Medicine()];
     rxNotes = '';
-    followUp = '7 Days';
+    followUp = _defaultFollowUpPreference;
     referral = 'None';
     prescriptionSending = false;
     prescriptionSent = false;
     rxError = '';
     signingStep = 0;
+    _pendingPrescriptionId = null;
+    consultationCompletionFailed = false;
     activeTranscript = [];
   }
 
@@ -824,107 +1018,6 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  // ---- AI summary & SOAP note ----
-  /// `POST /ai/summarize` (AI medical scribe). Feeds it the live transcript
-  /// if there is one, else the patient's chief complaint, and maps the
-  /// response's `{main_concerns, doctor_notes, follow_up}` onto
-  /// Subjective/Assessment/Plan — the AI service doesn't produce an
-  /// Objective/exam finding, so that field is left for the doctor.
-  void generateSummary() {
-    aiGenerating = true;
-    aiError = null;
-    notifyListeners();
-    unawaited(_runGenerateSummary());
-  }
-
-  Future<void> _runGenerateSummary() async {
-    final transcriptText = activeTranscript.map((t) => '${t.speaker}: ${t.text}').join('\n');
-    final notes = transcriptText.isNotEmpty ? transcriptText : (activePatient?.chiefComplaint ?? '');
-    try {
-      final result = await Api.ai.summarize(notes.isEmpty ? 'No clinical notes recorded yet.' : notes);
-      soap = SoapNote(
-        subjective: (result['main_concerns'] as String?) ?? '',
-        objective: '',
-        assessment: (result['doctor_notes'] as String?) ?? '',
-        plan: (result['follow_up'] as String?) ?? '',
-        subjectiveSource: 'ai',
-        objectiveSource: 'doctor',
-        assessmentSource: 'ai',
-        planSource: 'ai',
-      );
-      aiSummary = (result['main_concerns'] as String?) ?? '';
-      aiGenerated = true;
-      logAuditEvent('AI Summary and SOAP notes generated');
-    } catch (e) {
-      aiError = _describeError(e);
-      aiSummary = '';
-      aiGenerated = true;
-      logAuditEvent('AI Summary generation failed: $aiError');
-    } finally {
-      aiGenerating = false;
-      notifyListeners();
-    }
-  }
-
-  void updateSoapSubjective(String text) {
-    soap.subjective = text;
-    soap.subjectiveSource = 'doctor';
-    notifyListeners();
-  }
-
-  void updateSoapObjective(String text) {
-    soap.objective = text;
-    soap.objectiveSource = 'doctor';
-    notifyListeners();
-  }
-
-  void updateSoapAssessment(String text) {
-    soap.assessment = text;
-    soap.assessmentSource = 'doctor';
-    notifyListeners();
-  }
-
-  void updateSoapPlan(String text) {
-    soap.plan = text;
-    soap.planSource = 'doctor';
-    notifyListeners();
-  }
-
-  void setIcdQuery(String v) {
-    icdQuery = v;
-    notifyListeners();
-  }
-
-  /// Selecting an ICD-10 code both updates local state and — if a
-  /// consultation is already underway — appends it as a diagnosis entry via
-  /// `PUT /consultations/:id/diagnosis` (fire-and-forget; a failure here
-  /// just logs, it doesn't block the doctor from continuing the consult).
-  void pickIcd(String code) {
-    IcdCode? match;
-    for (final c in MockData.icdDb) {
-      if (c.code == code) {
-        match = c;
-        break;
-      }
-    }
-    if (match == null) return;
-    selectedIcd = match;
-    icdQuery = '';
-    logAuditEvent('ICD-10 code selected: $code');
-    notifyListeners();
-
-    final consultationId = activePatient?.consultationId;
-    if (consultationId != null) {
-      final icd = match;
-      unawaited(
-        Api.consultations.addDiagnosis(consultationId, icdCode: icd.code, description: icd.desc).catchError((e) {
-          logAuditEvent('Could not save diagnosis to server: ${_describeError(e)}');
-          return <Map<String, dynamic>>[];
-        }),
-      );
-    }
-  }
-
   // ---- drug warning logic ----
   // Local allergy cross-check against the patient's known allergy list —
   // stays client-side rather than calling `GET /ai/drug-interactions`
@@ -991,6 +1084,20 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Inserts a fully-specified medicine (name/dosage/frequency/duration) —
+  /// used by the Prescription Templates screen to drop a saved preset
+  /// straight into the active Rx builder, replacing the lone blank row if
+  /// nothing's been typed yet rather than leaving an empty row above it.
+  void addMedFromTemplate(Medicine template) {
+    final copy = Medicine(name: template.name, dosage: template.dosage, freq: template.freq, duration: template.duration, dosageForm: template.dosageForm);
+    if (rxMedicines.length == 1 && rxMedicines.first.name.trim().isEmpty) {
+      rxMedicines[0] = copy;
+    } else {
+      rxMedicines.add(copy);
+    }
+    notifyListeners();
+  }
+
   void removeMed(int i) {
     rxMedicines.removeAt(i);
     notifyListeners();
@@ -1016,6 +1123,11 @@ class AppState extends ChangeNotifier {
 
   void updateMedicineDuration(int index, String value) {
     rxMedicines[index].duration = value;
+    notifyListeners();
+  }
+
+  void updateMedicineDosageForm(int index, String value) {
+    rxMedicines[index].dosageForm = value;
     notifyListeners();
   }
 
@@ -1118,33 +1230,48 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (_blockIfOffline('Signing this prescription')) return;
 
     rxError = '';
     prescriptionSending = true;
+    consultationCompletionFailed = false;
     signingStep = 1; // POST draft
     logAuditEvent('Beginning prescription sign flow');
     notifyListeners();
 
     try {
-      final created = await Api.prescriptions.create({
-        'patientId': patientRecordId,
-        if (patient.consultationId != null) 'consultationId': patient.consultationId,
-        'diagnosis': [if (selectedIcd != null) selectedIcd!.desc],
-        'notes': rxNotes,
-        'medicines': rxMedicines.where((m) => m.name.trim().isNotEmpty).map((m) {
-          return {
-            'name': m.name,
-            'strength': m.dosage,
-            'dosageForm': 'tablet',
-            'frequency': {'timesPerDay': 0, 'times': <String>[], 'instructions': m.freq},
-            'durationDays': int.tryParse(m.duration.trim()) ?? 0,
-            'aiSuggested': m.aiSuggested,
-          };
-        }).toList(),
-      });
-      final prescriptionId = created['_id'] as String?;
-      if (prescriptionId == null) {
-        throw ApiException(message: 'Server did not return a prescription id.');
+      // If a previous attempt already created the draft (and only failed on
+      // approve/complete), reuse it instead of creating a duplicate.
+      String prescriptionId;
+      if (_pendingPrescriptionId != null) {
+        prescriptionId = _pendingPrescriptionId!;
+      } else {
+        final created = await Api.prescriptions.create({
+          'patientId': patientRecordId,
+          if (patient.consultationId != null) 'consultationId': patient.consultationId,
+          'diagnosis': [if (selectedIcd != null) selectedIcd!.desc],
+          'notes': rxNotes,
+          'medicines': rxMedicines.where((m) => m.name.trim().isNotEmpty).map((m) {
+            return {
+              'name': m.name,
+              'strength': m.dosage,
+              'dosageForm': m.dosageForm,
+              'frequency': {
+                'timesPerDay': _parseTimesPerDay(m.freq),
+                'times': <String>[],
+                'instructions': m.freq,
+              },
+              'durationDays': int.tryParse(m.duration.trim()) ?? 0,
+              'aiSuggested': m.aiSuggested,
+            };
+          }).toList(),
+        });
+        final id = created['_id'] as String?;
+        if (id == null) {
+          throw ApiException(message: 'Server did not return a prescription id.');
+        }
+        prescriptionId = id;
+        _pendingPrescriptionId = prescriptionId;
       }
 
       // Step 2: Approve & generate PDF
@@ -1155,9 +1282,14 @@ class AppState extends ChangeNotifier {
 
       // Step 3: Complete the consultation (pushes SOAP + marks the
       // appointment — and its linked consultation — completed server-side).
+      // The prescription is already validly signed at this point regardless
+      // of whether this step's server sync succeeds, so a failure here is
+      // surfaced as a warning rather than treated as the whole flow failing
+      // (which would otherwise let a retry re-create the prescription).
       signingStep = 3;
       notifyListeners();
-      await completeConsultation();
+      final completed = await completeConsultation();
+      consultationCompletionFailed = !completed;
 
       patientHistory.insert(
         0,
@@ -1187,7 +1319,10 @@ class AppState extends ChangeNotifier {
       prescriptionSending = false;
       prescriptionSent = true;
       signingStep = 0;
-      logAuditEvent('Prescription signed & consultation finalised');
+      _pendingPrescriptionId = null;
+      logAuditEvent(consultationCompletionFailed
+          ? 'Prescription signed, but consultation completion failed to sync'
+          : 'Prescription signed & consultation finalised');
     } catch (e) {
       prescriptionSending = false;
       signingStep = 0;
@@ -1199,6 +1334,7 @@ class AppState extends ChangeNotifier {
 
   void resetRx() {
     prescriptionSent = false;
+    consultationCompletionFailed = false;
     rxMedicines = [Medicine()];
     notifyListeners();
   }
@@ -1208,6 +1344,7 @@ class AppState extends ChangeNotifier {
   /// Joins `GET /consultations/doctor` (no populated patient info) against
   /// `GET /doctors/me/patients` (full patient docs) for display names.
   Future<void> loadPatientHistory() async {
+    if (_blockIfOffline('Loading patient history')) return;
     isLoadingHistory = true;
     notifyListeners();
     try {
@@ -1217,7 +1354,12 @@ class AppState extends ChangeNotifier {
           if (p['_id'] is String) p['_id'] as String: p,
       };
       final consultations = await Api.consultations.listMine();
-      _allPatientHistory = consultations.map(_mapConsultationToHistory).toList();
+      // Map each record independently — one malformed consultation
+      // shouldn't blank out the doctor's entire patient history.
+      _allPatientHistory = [
+        for (final c in consultations)
+          if (_tryMapConsultationToHistory(c) case final h?) h,
+      ];
       patientHistory = List.from(_allPatientHistory);
       _ensureSelectedHistory();
       logAuditEvent('Patient history loaded from server');
@@ -1227,6 +1369,18 @@ class AppState extends ChangeNotifier {
     } finally {
       isLoadingHistory = false;
       notifyListeners();
+    }
+  }
+
+  /// Wraps [_mapConsultationToHistory] so one record with an unexpected
+  /// field type logs and is skipped instead of throwing out of the whole
+  /// `.map()` and aborting the entire history refresh.
+  PatientHistory? _tryMapConsultationToHistory(Map<String, dynamic> c) {
+    try {
+      return _mapConsultationToHistory(c);
+    } catch (e) {
+      logAuditEvent('Skipped a malformed consultation record: ${_describeError(e)}');
+      return null;
     }
   }
 
@@ -1273,6 +1427,7 @@ class AppState extends ChangeNotifier {
       // Appointment, which this list endpoint doesn't join in.
       mode: 'Consultation',
       date: _formatShortDate(c['createdAt'] as String?),
+      createdAt: DateTime.tryParse((c['createdAt'] as String?) ?? ''),
       diagnosis: diagnosis,
       soap: soapForHistory,
       transcript: transcript,
@@ -1322,6 +1477,7 @@ class AppState extends ChangeNotifier {
                     dosage: (m['strength'] as String?) ?? '',
                     freq: (m['frequency'] is Map ? (m['frequency']['instructions'] as String?) : null) ?? '',
                     duration: (m['durationDays'] as num?)?.toString() ?? '',
+                    dosageForm: (m['dosageForm'] as String?) ?? 'tablet',
                     aiSuggested: m['aiSuggested'] == true,
                   ))
               .toList()
@@ -1340,9 +1496,10 @@ class AppState extends ChangeNotifier {
   // ---- notifications ----
 
   Future<void> loadNotifications() async {
+    // Fetched independently so the unread-count call failing (or vice
+    // versa) doesn't discard the notification list that already succeeded.
     try {
       final items = await Api.notifications.list(limit: 30);
-      unreadNotificationCount = await Api.notifications.unreadCount();
       inAppNotifications = items.map((n) {
         final title = (n['title'] as String?) ?? '';
         final body = (n['body'] as String?) ?? '';
@@ -1351,6 +1508,12 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       logAuditEvent('Notifications load failed: ${_describeError(e)}');
+    }
+    try {
+      unreadNotificationCount = await Api.notifications.unreadCount();
+      notifyListeners();
+    } catch (e) {
+      logAuditEvent('Unread notification count load failed: ${_describeError(e)}');
     }
   }
 
@@ -1373,6 +1536,34 @@ class AppState extends ChangeNotifier {
 }
 
 // ---- backend JSON → UI model mapping helpers ----
+
+/// Best-effort extraction of a numeric "times per day" from a freeform
+/// frequency/instructions string (e.g. "Twice daily", "1-0-1", "TDS after
+/// meals"). Falls back to 0 (unknown) rather than fabricating a value —
+/// callers should treat 0 as "doctor's written instructions are the source
+/// of truth" (`instructions` always carries the original text regardless).
+int _parseTimesPerDay(String freq) {
+  final f = freq.toLowerCase().trim();
+  if (f.isEmpty) return 0;
+
+  // "1-0-1" / "1-1-1" style dosing schedules: count non-zero slots.
+  final dashParts = f.split(RegExp(r'[-+]')).map((s) => s.trim()).toList();
+  if (dashParts.length >= 2 && dashParts.every((p) => RegExp(r'^\d+(\.\d+)?$').hasMatch(p))) {
+    final count = dashParts.where((p) => (double.tryParse(p) ?? 0) > 0).length;
+    if (count > 0) return count;
+  }
+
+  const keywordCounts = {
+    'once': 1, 'od ': 1, ' od': 1, 'qd': 1, 'daily': 1,
+    'twice': 2, 'bd ': 2, ' bd': 2, 'bid': 2,
+    'thrice': 3, 'tds': 3, 'tid': 3, 'three times': 3,
+    'four times': 4, 'qid': 4,
+  };
+  for (final entry in keywordCounts.entries) {
+    if (f.contains(entry.key)) return entry.value;
+  }
+  return 0;
+}
 
 String _fullName(Map person) {
   final first = (person['firstName'] as String?) ?? '';

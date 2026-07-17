@@ -4,6 +4,8 @@ import 'api_client.dart';
 import 'appointments_api.dart';
 import 'consultations_api.dart';
 import 'doctors_api.dart';
+import 'lab_api.dart';
+import 'messages_api.dart';
 import 'notifications_api.dart';
 import 'prescriptions_api.dart';
 
@@ -21,4 +23,6 @@ class Api {
   static final prescriptions = PrescriptionsApi(ApiClient.instance);
   static final notifications = NotificationsApi(ApiClient.instance);
   static final ai = AiApi(AiClient.instance);
+  static final lab = LabApi(ApiClient.instance);
+  static final messages = MessagesApi(ApiClient.instance);
 }

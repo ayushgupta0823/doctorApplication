@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
@@ -9,9 +10,36 @@ import '../../theme/app_theme.dart';
 import '../../utils/prescription_pdf.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/synced_text_field.dart';
+import '../more/prescription_templates_screen.dart';
 
 class PrescriptionTab extends StatelessWidget {
   const PrescriptionTab({super.key});
+
+  Future<void> _insertFromTemplate(BuildContext context, AppState app) async {
+    final templates = await loadPrescriptionTemplates();
+    if (!context.mounted) return;
+    if (templates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No saved templates yet — add one from More → Prescription Templates.')),
+      );
+      return;
+    }
+    final picked = await showModalBottomSheet<PrescriptionTemplate>(
+      context: context,
+      builder: (ctx) => ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        children: templates
+            .map((t) => ListTile(
+                  title: Text(t.medicine.name, style: AppText.body(size: 13, weight: FontWeight.w700)),
+                  subtitle: Text('${t.medicine.dosage} · ${t.medicine.freq} · ${t.medicine.duration}', style: AppText.body(size: 11, color: AppColors.ink600)),
+                  onTap: () => Navigator.pop(ctx, t),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) app.addMedFromTemplate(picked.medicine);
+  }
 
   Future<void> _confirmSign(BuildContext context, AppState app) async {
     if (!app.hasValidMedicine) {
@@ -63,24 +91,45 @@ class PrescriptionTab extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.medication_outlined, size: 18, color: AppColors.ink900),
-                  const SizedBox(width: 6),
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(color: AppColors.blue100, borderRadius: BorderRadius.circular(AppRadius.sm)),
+                    child: const Icon(Icons.medication_outlined, size: 16, color: AppColors.blue700),
+                  ),
+                  const SizedBox(width: 8),
                   Text('Prescription Builder', style: AppText.display(size: 13.5)),
                 ],
               ),
-              TextButton(
-                onPressed: app.aiPrescriptionLoading ? null : app.requestAiPrescriptionSuggestion,
-                child: Text(
-                  app.aiPrescriptionLoading ? 'Suggesting…' : '+ AI Suggestion',
-                  style: AppText.mono(size: 10, color: AppColors.tealDark),
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _TagButton(
+                    label: '+ Template',
+                    color: AppColors.blue700,
+                    background: AppColors.blue100,
+                    onPressed: () => _insertFromTemplate(context, app),
+                  ),
+                  const SizedBox(width: 8),
+                  _TagButton(
+                    label: app.aiPrescriptionLoading ? 'Suggesting…' : '+ AI Suggestion',
+                    color: AppColors.tealDark,
+                    background: AppColors.teal100,
+                    loading: app.aiPrescriptionLoading,
+                    onPressed: app.aiPrescriptionLoading ? null : app.requestAiPrescriptionSuggestion,
+                  ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
 
           // Medicine Rows
-          for (var i = 0; i < app.rxMedicines.length; i++) _MedRow(index: i),
+          for (var i = 0; i < app.rxMedicines.length; i++)
+            _MedRow(index: i)
+                .animate(delay: (i * 40).ms)
+                .fadeIn(duration: 220.ms)
+                .slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
 
           AppButton(
             label: 'Add Medicine',
@@ -93,29 +142,50 @@ class PrescriptionTab extends StatelessWidget {
 
           // Drug Interactions Box
           if (interactions.isNotEmpty) ...[
-            Text(
-              'DRUG INTERACTIONS DETECTED',
-              style: AppText.mono(size: 10, color: AppColors.red600, weight: FontWeight.bold),
-            ),
-            const SizedBox(height: 6),
-            Column(
-              children: interactions
-                  .map((i) => Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 6),
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppColors.red100,
-                          border: Border.all(color: AppColors.red600.withValues(alpha: 0.3)),
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                        ),
-                        child: Text(
-                          i,
-                          style: AppText.body(size: 11.5, color: AppColors.red600, weight: FontWeight.bold),
-                        ),
-                      ))
-                  .toList(),
-            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.red100,
+                border: Border.all(color: AppColors.red600.withValues(alpha: 0.35)),
+                borderRadius: BorderRadius.circular(AppRadius.md),
+                boxShadow: AppShadow.sm,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.report_problem_rounded, size: 15, color: AppColors.red600),
+                      const SizedBox(width: 6),
+                      Text(
+                        'DRUG INTERACTIONS DETECTED',
+                        style: AppText.mono(size: 10, color: AppColors.red600, weight: FontWeight.bold).copyWith(letterSpacing: .3),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Column(
+                    children: interactions
+                        .map((i) => Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(bottom: 6),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.55),
+                                border: Border.all(color: AppColors.red600.withValues(alpha: 0.3)),
+                                borderRadius: BorderRadius.circular(AppRadius.sm),
+                              ),
+                              child: Text(
+                                i,
+                                style: AppText.body(size: 11.5, color: AppColors.red600, weight: FontWeight.bold),
+                              ),
+                            ))
+                        .toList(),
+                  ),
+                ],
+              ),
+            ).animate().fadeIn(duration: 220.ms).slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 12),
           ],
 
@@ -144,7 +214,10 @@ class PrescriptionTab extends StatelessWidget {
 
           // Multi-step progress indicator
           if (app.prescriptionSending) ...[
-            _SigningProgressIndicator(step: app.signingStep),
+            _SigningProgressIndicator(step: app.signingStep)
+                .animate()
+                .fadeIn(duration: 200.ms)
+                .slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
             const SizedBox(height: 16),
           ],
 
@@ -155,12 +228,22 @@ class PrescriptionTab extends StatelessWidget {
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: AppColors.red100,
-                  border: Border.all(color: AppColors.red600.withValues(alpha: 0.2)),
+                  border: Border.all(color: AppColors.red600.withValues(alpha: 0.25)),
                   borderRadius: BorderRadius.circular(AppRadius.sm),
+                  boxShadow: [BoxShadow(color: AppColors.red600.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 3))],
                 ),
-                child: Text(app.rxError, style: AppText.body(size: 11.5, color: AppColors.red600, weight: FontWeight.bold)),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.error_outline, size: 15, color: AppColors.red600),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(app.rxError, style: AppText.body(size: 11.5, color: AppColors.red600, weight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
               ),
-            ),
+            ).animate().fadeIn(duration: 180.ms).shake(hz: 3, curve: Curves.easeInOut),
 
           Row(
             children: [
@@ -221,9 +304,56 @@ class PrescriptionTab extends StatelessWidget {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not preview PDF: $e'), backgroundColor: AppColors.red600));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not preview the prescription PDF — ${app.describeError(e)}'), backgroundColor: AppColors.red600));
       }
     }
+  }
+}
+
+/// Small pill-shaped action tag used for the "+ Template" / "+ AI
+/// Suggestion" affordances above the medicine list — a tinted rounded
+/// chip reads as an action shortcut more clearly than a bare TextButton.
+class _TagButton extends StatelessWidget {
+  const _TagButton({
+    required this.label,
+    required this.color,
+    required this.background,
+    required this.onPressed,
+    this.loading = false,
+  });
+
+  final String label;
+  final Color color;
+  final Color background;
+  final VoidCallback? onPressed;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: onPressed == null && !loading ? .55 : 1,
+      child: Material(
+        color: background,
+        borderRadius: BorderRadius.circular(100),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(100),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (loading) ...[
+                  SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.6, color: color)),
+                  const SizedBox(width: 6),
+                ],
+                Text(label, style: AppText.mono(size: 10, weight: FontWeight.w700, color: color)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -237,19 +367,21 @@ class _MedRow extends StatelessWidget {
     final Medicine m = app.rxMedicines[index];
 
     final allergyWarnings = app.getWarningsForMed(m.name);
+    final hasWarning = allergyWarnings.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: m.aiSuggested ? AppColors.teal100.withValues(alpha: 0.4) : AppColors.white,
         border: Border.all(
-          color: allergyWarnings.isNotEmpty
-              ? AppColors.red600
-              : (m.aiSuggested ? AppColors.teal500 : AppColors.line),
-          width: m.aiSuggested || allergyWarnings.isNotEmpty ? 1.5 : 1.0,
+          color: hasWarning ? AppColors.red600 : (m.aiSuggested ? AppColors.teal500 : AppColors.line),
+          width: m.aiSuggested || hasWarning ? 1.5 : 1.0,
         ),
         borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: hasWarning
+            ? [BoxShadow(color: AppColors.red600.withValues(alpha: 0.12), blurRadius: 14, offset: const Offset(0, 4))]
+            : AppShadow.sm,
       ),
       child: Stack(
         children: [
@@ -264,22 +396,34 @@ class _MedRow extends StatelessWidget {
               ),
 
               // Allergy warnings
-              if (allergyWarnings.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
+              if (hasWarning)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.red100,
+                    border: Border.all(color: AppColors.red600.withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                  ),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: allergyWarnings
-                        .map((w) => Row(
-                              children: [
-                                const Icon(Icons.warning, color: AppColors.red600, size: 14),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Text(
-                                    w,
-                                    style: AppText.body(size: 11, color: AppColors.red600, weight: FontWeight.bold),
+                        .map((w) => Padding(
+                              padding: const EdgeInsets.only(bottom: 2),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(Icons.warning, color: AppColors.red600, size: 14),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      w,
+                                      style: AppText.body(size: 11, color: AppColors.red600, weight: FontWeight.bold),
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ))
                         .toList(),
                   ),
@@ -310,12 +454,25 @@ class _MedRow extends StatelessWidget {
                         SyncedTextField(
                           value: m.duration,
                           hintText: 'e.g. 7',
+                          keyboardType: TextInputType.number,
                           onChanged: (v) => app.updateMedicineDuration(index, v),
                         ),
                       ],
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              _fieldLabel('Dosage form'),
+              DropdownButtonFormField<String>(
+                initialValue: kDosageForms.contains(m.dosageForm) ? m.dosageForm : kDosageForms.first,
+                isExpanded: true,
+                items: kDosageForms
+                    .map((f) => DropdownMenuItem(value: f, child: Text(f[0].toUpperCase() + f.substring(1))))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) app.updateMedicineDosageForm(index, v);
+                },
               ),
               const SizedBox(height: 8),
               _fieldLabel('Frequency / instructions'),
@@ -333,14 +490,22 @@ class _MedRow extends StatelessWidget {
               top: 0,
               right: app.rxMedicines.length > 1 ? 32 : 0,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
                   color: AppColors.teal500,
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(100),
+                  boxShadow: [BoxShadow(color: AppColors.teal500.withValues(alpha: 0.3), blurRadius: 6, offset: const Offset(0, 2))],
                 ),
-                child: Text(
-                  'AI SUGGESTION',
-                  style: AppText.mono(size: 8, color: Colors.white, weight: FontWeight.bold),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.auto_awesome, size: 9, color: Colors.white),
+                    const SizedBox(width: 3),
+                    Text(
+                      'AI SUGGESTION',
+                      style: AppText.mono(size: 8, color: Colors.white, weight: FontWeight.bold).copyWith(letterSpacing: .2),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -351,9 +516,9 @@ class _MedRow extends StatelessWidget {
               right: 0,
               child: Material(
                 color: AppColors.red100,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(100),
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(100),
                   onTap: () => app.removeMed(index),
                   child: const SizedBox(
                     width: 26,
@@ -398,15 +563,25 @@ class _SigningProgressIndicator extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppColors.blue100,
         border: Border.all(color: AppColors.blue500.withValues(alpha: 0.3)),
         borderRadius: BorderRadius.circular(AppRadius.md),
+        boxShadow: AppShadow.sm,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Row(
+            children: [
+              for (var s = 1; s <= 3; s++) ...[
+                _StepDot(active: s <= step),
+                if (s != 3) Expanded(child: Container(height: 2, color: s < step ? AppColors.blue600 : AppColors.blue500.withValues(alpha: 0.25))),
+              ],
+            ],
+          ),
+          const SizedBox(height: 10),
           Row(
             children: [
               const SizedBox(
@@ -424,8 +599,32 @@ class _SigningProgressIndicator extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          LinearProgressIndicator(value: value, color: AppColors.blue600, backgroundColor: Colors.white),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(100),
+            child: LinearProgressIndicator(value: value, minHeight: 6, color: AppColors.blue600, backgroundColor: Colors.white),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// One node in the sign/approve step tracker above the progress message.
+class _StepDot extends StatelessWidget {
+  const _StepDot({required this.active});
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: active ? AppColors.blue600 : Colors.white,
+        border: Border.all(color: AppColors.blue600, width: active ? 0 : 1.4),
+        boxShadow: active ? [BoxShadow(color: AppColors.blue600.withValues(alpha: 0.4), blurRadius: 4)] : null,
       ),
     );
   }
@@ -533,22 +732,52 @@ class _SignedOverlay extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: AppColors.white,
               border: Border.all(color: AppColors.line),
               borderRadius: BorderRadius.circular(AppRadius.lg),
+              boxShadow: AppShadow.md,
             ),
             child: Column(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.check_circle, size: 20, color: AppColors.green600),
-                    const SizedBox(width: 6),
-                    Text('Prescription signed', style: AppText.display(size: 16, color: AppColors.green600)),
-                  ],
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: AppColors.green100,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: AppColors.green600.withValues(alpha: 0.25), blurRadius: 12, offset: const Offset(0, 4))],
+                  ),
+                  child: const Icon(Icons.check_circle, size: 26, color: AppColors.green600),
                 ),
+                const SizedBox(height: 10),
+                Text('Prescription signed', style: AppText.display(size: 16, color: AppColors.green600)),
+                if (app.consultationCompletionFailed) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.amber100,
+                      border: Border.all(color: AppColors.amberBorder),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.amberDark),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'The prescription is signed, but marking the consultation complete did not sync with the server — check your connection and the queue status for this patient.',
+                            style: AppText.body(size: 11, color: AppColors.amberDark, weight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 // ABDM QR representation
                 SizedBox(
@@ -598,7 +827,7 @@ class _SignedOverlay extends StatelessWidget {
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Could not open PDF: $e'), backgroundColor: AppColors.red600),
+                          SnackBar(content: Text('Could not open the signed PDF — ${app.describeError(e)}'), backgroundColor: AppColors.red600),
                         );
                       }
                     }
@@ -625,7 +854,7 @@ class _SignedOverlay extends StatelessWidget {
             onPressed: app.resetRx,
           ),
         ],
-      ),
+      ).animate().fadeIn(duration: 260.ms).slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
     );
   }
 }

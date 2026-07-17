@@ -5,11 +5,45 @@ import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_button.dart';
 import '../widgets/app_card.dart';
+import '../widgets/avatar.dart';
 import 'more/simple_info_screen.dart';
 import 'settings/clinic_information_screen.dart';
 import 'settings/consultation_settings_screen.dart';
+import 'settings/earnings_screen.dart';
 import 'settings/notification_preferences_screen.dart';
 import 'settings/security_privacy_screen.dart';
+import 'settings/working_hours_screen.dart';
+
+/// `0` (a genuinely rating-less new doctor) reads as "New" rather than a
+/// hollow "0.0" star rating.
+String _formatRating(dynamic raw) {
+  final rating = raw is num ? raw.toDouble() : 0.0;
+  return rating <= 0 ? 'New' : rating.toStringAsFixed(1);
+}
+
+class _DoctorStat extends StatelessWidget {
+  const _DoctorStat({required this.icon, required this.iconColor, required this.value, required this.label});
+  final IconData icon;
+  final Color iconColor;
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+      decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md), boxShadow: AppShadow.sm),
+      child: Column(
+        children: [
+          Icon(icon, size: 16, color: iconColor),
+          const SizedBox(height: 4),
+          Text(value, style: AppText.mono(size: 13.5, weight: FontWeight.bold, color: AppColors.ink900)),
+          Text(label, style: AppText.body(size: 9, color: AppColors.ink600, weight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
 
 class _SettingsRow {
   const _SettingsRow(this.icon, this.label, this.subtitle, this.builder);
@@ -27,11 +61,11 @@ class ProfileScreen extends StatelessWidget {
 
   static final List<_SettingsRow> _rows = [
     _SettingsRow(Icons.storefront_outlined, 'Clinic Information', 'Personal details, specialties, location', (_) => const ClinicInformationScreen()),
-    _SettingsRow(Icons.schedule_outlined, 'Working Hours', 'Set your weekly availability', (_) => const SimpleInfoScreen(title: 'Working Hours', icon: Icons.schedule_outlined, description: 'Configure the hours you take consultations each day of the week.')),
+    _SettingsRow(Icons.schedule_outlined, 'Working Hours', 'Set your weekly availability', (_) => const WorkingHoursScreen()),
     _SettingsRow(Icons.tune_outlined, 'Consultation Settings', 'Fees, default follow-up period', (_) => const ConsultationSettingsScreen()),
     _SettingsRow(Icons.notifications_outlined, 'Notification Preferences', 'Push, camera & microphone access', (_) => const NotificationPreferencesScreen()),
     _SettingsRow(Icons.shield_outlined, 'Security & Privacy', 'Digital signature, app lock', (_) => const SecurityPrivacyScreen()),
-    _SettingsRow(Icons.payments_outlined, 'Payment & Earnings', 'Consultation earnings and payouts', (_) => const SimpleInfoScreen(title: 'Payment & Earnings', icon: Icons.payments_outlined, description: 'Payout history and earnings summary will appear here once billing is connected.')),
+    _SettingsRow(Icons.payments_outlined, 'Payment & Earnings', 'Estimated consultation earnings', (_) => const EarningsScreen()),
     _SettingsRow(Icons.info_outline, 'About MediConnectAI', 'Version, licenses, credits', (_) => const SimpleInfoScreen(title: 'About MediConnectAI', icon: Icons.info_outline, description: 'MediConnectAI Doctor App · Version 1.0.0', items: ['Terms of Service', 'Privacy Policy', 'Open-source licenses'])),
   ];
 
@@ -47,7 +81,6 @@ class ProfileScreen extends StatelessWidget {
         leading: IconButton(icon: const Icon(Icons.arrow_back, color: AppColors.ink900), onPressed: () => Navigator.pop(context)),
         title: Text('My Profile', style: AppText.display(size: 16)),
         centerTitle: true,
-        actions: [IconButton(icon: const Icon(Icons.settings_outlined, size: 20), onPressed: () {})],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -60,20 +93,14 @@ class ProfileScreen extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
-                  alignment: Alignment.center,
-                  child: Text('DR', style: AppText.display(size: 18, color: Colors.white)),
-                ),
+                InitialsAvatar(name: app.doctorDisplayName, size: 56, fontSize: 18, imageUrl: app.doctorProfile?['profilePhoto'] as String?),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Dr. Rhea Kulkarni', style: AppText.display(size: 15, color: Colors.white)),
-                      Text('MBBS, MD (Medicine)', style: AppText.body(size: 11.5, color: AppColors.blue100)),
+                      Text(app.doctorDisplayName, style: AppText.display(size: 15, color: Colors.white), overflow: TextOverflow.ellipsis),
+                      Text(app.doctorQualificationsLabel, style: AppText.body(size: 11.5, color: AppColors.blue100)),
                     ],
                   ),
                 ),
@@ -94,7 +121,7 @@ class ProfileScreen extends StatelessWidget {
               children: [
                 Text('NMC Registration', style: AppText.body(size: 12, weight: FontWeight.w600, color: AppColors.blue700)),
                 const SizedBox(width: 6),
-                Expanded(child: Text(app.nmcNumber.isNotEmpty ? app.nmcNumber : 'NMC-2016-MH-08421', style: AppText.mono(size: 11.5, color: AppColors.blue700))),
+                Expanded(child: Text(app.doctorNmcNumber, style: AppText.mono(size: 11.5, color: AppColors.blue700))),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(color: AppColors.green100, borderRadius: BorderRadius.circular(100)),
@@ -107,6 +134,18 @@ class ProfileScreen extends StatelessWidget {
               ],
             ),
           ),
+          if (app.doctorProfile != null) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: _DoctorStat(icon: Icons.star_rounded, iconColor: AppColors.amber600, value: _formatRating(app.doctorProfile?['averageRating']), label: 'Rating')),
+                const SizedBox(width: 8),
+                Expanded(child: _DoctorStat(icon: Icons.reviews_outlined, iconColor: AppColors.blue600, value: '${app.doctorProfile?['totalReviews'] ?? 0}', label: 'Reviews')),
+                const SizedBox(width: 8),
+                Expanded(child: _DoctorStat(icon: Icons.event_available_outlined, iconColor: AppColors.green600, value: '${app.doctorProfile?['totalConsultations'] ?? 0}', label: 'Consultations')),
+              ],
+            ),
+          ],
           const SizedBox(height: 18),
           AppCard(
             padding: const EdgeInsets.all(4),

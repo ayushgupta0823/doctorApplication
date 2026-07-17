@@ -15,6 +15,7 @@ class SyncedTextField extends StatefulWidget {
     this.minLines,
     this.maxLines = 1,
     this.style,
+    this.keyboardType,
   });
 
   final String value;
@@ -23,6 +24,7 @@ class SyncedTextField extends StatefulWidget {
   final int? minLines;
   final int maxLines;
   final TextStyle? style;
+  final TextInputType? keyboardType;
 
   @override
   State<SyncedTextField> createState() => _SyncedTextFieldState();
@@ -58,6 +60,7 @@ class _SyncedTextFieldState extends State<SyncedTextField> {
       minLines: widget.minLines,
       maxLines: widget.maxLines,
       style: widget.style,
+      keyboardType: widget.keyboardType,
       decoration: InputDecoration(hintText: widget.hintText),
       onChanged: widget.onChanged,
     );

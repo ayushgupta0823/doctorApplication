@@ -1,9 +1,9 @@
 // Smoke tests for the 5-tab IA (Home/Queue/Patients/Calendar/More) with
 // Consultation, Patient Details, Profile, Appointments, and Reports as
-// pushed routes. Covers onboarding, tab navigation, queue actions, the
-// consult room (video call, AI scribe, ICD-10 lookup, prescription
-// signing), patient details, calendar, profile settings, appointments,
-// reports, and the more menu.
+// pushed routes. Covers the Welcome -> Doctor Registration wizard, tab
+// navigation, queue actions, the consult room (video call, AI scribe,
+// ICD-10 lookup, prescription signing), patient details, calendar, profile
+// settings, appointments, reports, and the more menu.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,12 +14,10 @@ import 'package:mediconnect_doctor_app/widgets/app_card.dart';
 
 void main() {
   // permission_handler's platform channel has no native implementation in
-  // the widget-test sandbox, so calls to it never resolve. Left unmocked,
-  // the onboarding screen's "Grant" buttons stay stuck in their loading
-  // state (an indeterminate CircularProgressIndicator that animates
-  // forever), which makes every pumpAndSettle() after that point time out.
-  // Respond as if every permission is granted, matching what real Android
-  // does when the user taps "Allow".
+  // the widget-test sandbox, so calls to it never resolve. Respond as if
+  // every permission is granted, matching what real Android does when the
+  // user taps "Allow" — exercised by the Settings > Notification
+  // Preferences screen, not by registration itself anymore.
   const permissionChannel = MethodChannel('flutter.baseflow.com/permissions/methods');
   const kGranted = 1; // PermissionStatus.values.indexOf(PermissionStatus.granted)
   TestWidgetsFlutterBinding.ensureInitialized()
@@ -40,6 +38,20 @@ void main() {
     }
   });
 
+  // file_picker's platform channel is likewise unimplemented in the test
+  // sandbox — the Documents step's real file picker would hang forever
+  // waiting on a native file dialog. Respond as if the doctor picked one
+  // file, for any of the three upload slots.
+  const filePickerChannel = MethodChannel('miguelruivo.flutter.plugins.filepicker');
+  TestWidgetsFlutterBinding.ensureInitialized()
+      .defaultBinaryMessenger
+      .setMockMethodCallHandler(filePickerChannel, (call) async {
+    if (call.method == 'clear') return true;
+    return [
+      {'name': 'document.pdf', 'path': '/tmp/document.pdf', 'size': 2048, 'bytes': null, 'identifier': null},
+    ];
+  });
+
   Future<void> useTallSurface(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(500, 3500));
     tester.view.physicalSize = const Size(500, 3500);
@@ -50,54 +62,107 @@ void main() {
     });
   }
 
-  // Helper to bypass Login and Onboarding and land on the Home tab.
-  Future<void> loginAndOnboard(WidgetTester tester) async {
-    // 1. Enter email/phone
-    await tester.enterText(find.byType(TextField).first, 'doctor@mediconnect.ai');
-    await tester.tap(find.text('Send OTP'));
+  // Helper to drive Welcome -> the 4-step Doctor Registration wizard and
+  // land on the Home tab. Every text field is addressed by its position in
+  // the widget tree (documented inline) since several steps reuse hint
+  // text/labels across fields.
+  Future<void> registerAndOnboard(WidgetTester tester) async {
+    // Welcome screen.
+    await tester.tap(find.text('Registration Profile'));
     await tester.pumpAndSettle();
 
-    // 2. OTP: there's no real SMS/email gateway behind this demo, so the
-    // 4 boxes auto-fill with the mock code as soon as this screen appears
-    // — no manual entry needed.
-    await tester.tap(find.text('Verify OTP'));
+    // ---- Step 1: Personal Details ----
+    // TextField order: First Name(0), Middle Name(1), Last Name(2),
+    // Contact Phone(3), Official Email(4), Password(5), Confirm Password(6).
+    await tester.enterText(find.byType(TextField).at(0), 'Ayush');
+    await tester.enterText(find.byType(TextField).at(2), 'Gupta');
+
+    await tester.tap(find.text('Select date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
 
-    // 3. NMC Verification
-    await tester.enterText(find.byType(TextField).first, 'NMC-2016-MH-08421');
-    await tester.tap(find.text('Verify NMC'));
+    // Gender is the only dropdown on this step.
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Male').last);
     await tester.pumpAndSettle();
 
-    // 4. Digital Signature Setup
-    await tester.enterText(find.byType(TextField).first, 'Dr. Rhea Kulkarni');
-    await tester.tap(find.text('Save & Continue'));
+    await tester.enterText(find.byType(TextField).at(3), '9876543210');
+    await tester.enterText(find.byType(TextField).at(4), 'ayush@clinic.com');
+    await tester.enterText(find.byType(TextField).at(5), 'secret123');
+    await tester.enterText(find.byType(TextField).at(6), 'secret123');
+
+    await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
 
-    // 5. Grant Permissions (Notifications and Camera/Mic)
-    await tester.tap(find.text('Grant').first);
+    // ---- Step 2: Credentials ----
+    // TextField order: NMC Number(0), Experience(1), specialty search(2),
+    // Languages(3).
+    await tester.enterText(find.byType(TextField).at(0), 'NMC-2016-MH-08421');
+    await tester.enterText(find.byType(TextField).at(1), '8');
+    await tester.tap(find.text('Cardiology'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Grant').first);
+    await tester.enterText(find.byType(TextField).at(3), 'English, Hindi');
+
+    await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Complete Onboarding'));
+    // ---- Step 3: Practice Details ----
+    // TextField order: Clinic Location(0), Pincode(1), Video Fee(2),
+    // In-person Fee(3) — the fee fields default to "500" so they're left as-is.
+    await tester.enterText(find.byType(TextField).at(0), 'Sunrise Clinic, MG Road');
+
+    // State and City are the only two dropdowns on this step (State first).
+    await tester.tap(find.byType(DropdownButtonFormField<String>).at(0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Maharashtra').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).at(1));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mumbai').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).at(1), '400069');
+
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+
+    // ---- Step 4: Documents ----
+    // Only the first (required NMC/State Council Certificate) upload is
+    // needed to unlock Submit Application.
+    await tester.tap(find.text('Click to upload').first);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Submit Application'));
+    // Not pumpAndSettle here: the success screen below runs a
+    // Timer.periodic for its auto-continue countdown, which never
+    // "settles" on its own. Pump just enough real time for the wizard's
+    // own 400ms submit delay and the stage cross-fade to resolve instead.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Registration Submitted!'), findsOneWidget);
+    await tester.tap(find.textContaining('Continue to Dashboard'));
     await tester.pumpAndSettle();
 
     // Home is a permanent bottom-nav tab now, not a one-time landing
-    // screen — onboarding completing lands directly on it.
+    // screen — continuing from the success summary lands directly on it.
   }
 
-  testWidgets('App boots on login, completes onboarding, and lands on the Home tab',
+  testWidgets('App boots on the Welcome screen, completes registration, and lands on the Home tab',
       (WidgetTester tester) async {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
 
-    expect(find.text('Welcome Back, Doctor 👋'), findsOneWidget);
-    expect(find.text('Mobile Number or Email'), findsOneWidget);
+    expect(find.text('Welcome'), findsOneWidget);
+    expect(find.text('Registration Profile'), findsOneWidget);
 
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
-    expect(find.text('Dr. Rhea Kulkarni'), findsOneWidget);
+    expect(find.text('Dr. Ayush Gupta'), findsOneWidget);
     expect(find.text('LIVE PATIENT QUEUE'), findsOneWidget);
     // All 5 bottom-nav destinations are present.
     expect(find.text('Home'), findsOneWidget);
@@ -107,26 +172,24 @@ void main() {
     expect(find.text('More'), findsOneWidget);
   });
 
-  testWidgets('Login: OTP boxes auto-fill with the demo code so signing in never gets stuck',
+  testWidgets('Registration: Personal Details step shows a validation error when required fields are missing',
       (WidgetTester tester) async {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
 
-    await tester.enterText(find.byType(TextField).first, 'doctor@mediconnect.ai');
-    await tester.tap(find.text('Send OTP'));
+    await tester.tap(find.text('Registration Profile'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Enter OTP'), findsOneWidget);
-    final otpFields = tester.widgetList<TextField>(find.byType(TextField)).toList();
-    expect(otpFields, hasLength(4));
-    for (final field in otpFields) {
-      expect(field.controller!.text, isNotEmpty);
-    }
-
-    await tester.tap(find.text('Verify OTP'));
+    // Nothing filled in yet — Continue should surface a validation error
+    // instead of silently advancing to Credentials.
+    await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
-    expect(find.text('Medical Council Verification'), findsOneWidget);
+
+    expect(find.text('Please enter your first and last name.'), findsOneWidget);
+    // Still on step 1 — the Credentials step's own field hasn't appeared
+    // (the step *label* "Credentials" is always visible in the stepper).
+    expect(find.text('NMC Registration Number'), findsNothing);
   });
 
   testWidgets('Home: Start Consultation quick action opens the Consult Room for the next patient',
@@ -134,7 +197,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     // The queue is sorted in-progress-first, so Vikram Singh (already
     // in_progress in the mock data) is "next" and gets resumed rather
@@ -144,10 +207,10 @@ void main() {
 
     expect(find.text('Vikram Singh'), findsWidgets);
     // The sub-tab row is horizontally scrollable, so only the first couple
-    // of tabs (Notes, Prescription) are guaranteed to be laid out without
-    // scrolling; the rest are exercised by other tests that tap them.
-    expect(find.text('Notes'), findsOneWidget);
+    // of tabs (Prescription, Lab Tests) are guaranteed to be laid out
+    // without scrolling; the rest are exercised by other tests that tap them.
     expect(find.text('Prescription'), findsOneWidget);
+    expect(find.text('Lab Tests'), findsOneWidget);
   });
 
   testWidgets('Queue: an in-progress patient shows Resume Consultation instead of Start',
@@ -155,7 +218,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Queue'));
     await tester.pumpAndSettle();
@@ -174,7 +237,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Queue'));
     await tester.pumpAndSettle();
@@ -200,7 +263,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Queue'));
     await tester.pumpAndSettle();
@@ -237,34 +300,12 @@ void main() {
     expect(find.text('No notes yet.'), findsNothing);
   });
 
-  testWidgets('Consult Room: generate AI SOAP summary and search ICD-10 on the Notes tab',
-      (WidgetTester tester) async {
-    await useTallSurface(tester);
-    await tester.pumpWidget(const MediConnectDoctorApp());
-    await tester.pump();
-    await loginAndOnboard(tester);
-
-    await tester.tap(find.text('Start Consultation'));
-    await tester.pumpAndSettle();
-
-    // Notes is the default sub-tab, showing the AI SOAP Scribe panel.
-    await tester.tap(find.text('Generate SOAP'));
-    await tester.pump(); // starts the 2200ms simulated request
-    await tester.pump(const Duration(milliseconds: 2300));
-    expect(find.text('Re-generate'), findsOneWidget);
-
-    await tester.enterText(find.widgetWithText(TextField, 'Search condition or code…'), 'migraine');
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 310)); // debouncing
-    expect(find.textContaining('Migraine, unspecified'), findsOneWidget);
-  });
-
   testWidgets('Consult Room: video call join/leave confirmation, then returning to the Queue tab',
       (WidgetTester tester) async {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Queue'));
     await tester.pumpAndSettle();
@@ -309,7 +350,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Start Consultation'));
     await tester.pumpAndSettle();
@@ -328,7 +369,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Queue'));
     await tester.pumpAndSettle();
@@ -360,7 +401,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Calendar'));
     await tester.pumpAndSettle();
@@ -375,7 +416,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Calendar'));
     await tester.pumpAndSettle();
@@ -392,7 +433,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Patients'));
     await tester.pumpAndSettle();
@@ -411,9 +452,9 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
-    await tester.tap(find.text('Dr. Rhea Kulkarni'));
+    await tester.tap(find.text('Dr. Ayush Gupta'));
     await tester.pumpAndSettle();
 
     expect(find.text('My Profile'), findsOneWidget);
@@ -431,7 +472,7 @@ void main() {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('Appointments'));
     await tester.pumpAndSettle();
@@ -450,23 +491,16 @@ void main() {
     expect(find.text('Test Walkin'), findsOneWidget);
   });
 
-  testWidgets('More tab: renders the feature grid and toggles dark mode', (WidgetTester tester) async {
+  testWidgets('More tab: renders the feature grid and opens Reports & Analytics', (WidgetTester tester) async {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
-    await loginAndOnboard(tester);
+    await registerAndOnboard(tester);
 
     await tester.tap(find.text('More'));
     await tester.pumpAndSettle();
 
     expect(find.text('Everything else you need, in one place'), findsOneWidget);
-    expect(find.text('Dark Mode'), findsOneWidget);
-
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-
-    final toggled = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
-    expect(toggled.value, isTrue);
 
     await tester.tap(find.text('Reports & Analytics'));
     await tester.pumpAndSettle();

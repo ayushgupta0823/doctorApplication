@@ -18,7 +18,7 @@ class StatusBadge extends StatelessWidget {
       case ConsultStatus.waiting:
         return (bg: AppColors.amber100, fg: AppColors.amber600);
       case ConsultStatus.inProgress:
-        return (bg: const Color(0xFFFDEBD6), fg: const Color(0xFFC25A00));
+        return (bg: AppColors.orange100, fg: AppColors.orange600);
       case ConsultStatus.completed:
         return (bg: AppColors.green100, fg: AppColors.green600);
       case ConsultStatus.noShow:
