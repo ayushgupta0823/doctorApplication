@@ -9,17 +9,18 @@ import 'welcome_screen.dart';
 
 enum _Stage { welcome, wizard, success }
 
-/// Hosts the pre-login flow: Welcome splash -> the 4-step Doctor
+/// Hosts the solo self-apply flow: Welcome splash -> the 4-step Doctor
 /// Registration wizard -> a success summary screen, shown by [RootShell]
-/// whenever `AppState.isOnboarded` is false. Uses local state to switch
-/// between the three rather than pushing Navigator routes, matching how the
-/// old onboarding screen managed its own internal steps.
+/// whenever `AppState.authStage` is `AuthStage.needsOnboarding`. Uses local
+/// state to switch between the three rather than pushing Navigator routes,
+/// matching how the old onboarding screen managed its own internal steps.
 ///
-/// `AppState.completeRegistration` (the call that actually flips
-/// `isOnboarded` and swaps [RootShell] over to the main app) is deferred
-/// until the success screen finishes — so the doctor sees the summary
-/// before landing on the dashboard, instead of the app switching out from
-/// under the wizard the instant "Submit Application" is tapped.
+/// The wizard's own "Submit Application" step already calls the real
+/// `POST /doctors/apply` (via `AppState.submitDoctorApplication`) before
+/// handing off to the success screen here — `_finish` just acknowledges that
+/// and moves `authStage` to `pendingReview`, deferred until the success
+/// screen finishes so the doctor sees the summary before the app navigates
+/// away, instead of switching out from under the wizard.
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
 
@@ -32,31 +33,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   RegistrationData? _submittedData;
 
   void _finish() {
-    final data = _submittedData;
-    if (data == null) return;
-    context.read<AppState>().completeRegistration(
-          firstName: data.firstName,
-          middleName: data.middleName,
-          lastName: data.lastName,
-          dateOfBirth: data.dateOfBirth,
-          gender: data.gender,
-          contactPhone: data.contactPhone,
-          officialEmail: data.officialEmail,
-          nmcRegistrationNumber: data.nmcRegistrationNumber,
-          experienceYears: data.experienceYears,
-          specialties: data.specialties,
-          qualifications: data.qualifications,
-          languages: data.languages,
-          clinicLocation: data.clinicLocation,
-          state: data.state,
-          city: data.city,
-          pincode: data.pincode,
-          videoFee: data.videoFee,
-          inPersonFee: data.inPersonFee,
-          nmcCertificateFile: data.nmcCertificateFile,
-          govIdFile: data.govIdFile,
-          degreeCertificateFile: data.degreeCertificateFile,
-        );
+    if (_submittedData == null) return;
+    context.read<AppState>().acknowledgeApplicationSubmitted();
   }
 
   @override

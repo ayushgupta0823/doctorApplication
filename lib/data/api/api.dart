@@ -2,10 +2,13 @@ import 'ai_api.dart';
 import 'ai_client.dart';
 import 'api_client.dart';
 import 'appointments_api.dart';
+import 'auth_api.dart';
 import 'consultations_api.dart';
 import 'doctors_api.dart';
+import 'invites_api.dart';
 import 'lab_api.dart';
 import 'messages_api.dart';
+import 'mobile_auth_api.dart';
 import 'notifications_api.dart';
 import 'prescriptions_api.dart';
 
@@ -17,7 +20,10 @@ export 'api_exception.dart';
 class Api {
   Api._();
 
+  static final mobileAuth = MobileAuthApi(ApiClient.instance);
+  static final auth = AuthApi(ApiClient.instance);
   static final doctors = DoctorsApi(ApiClient.instance);
+  static final invites = InvitesApi(ApiClient.instance);
   static final appointments = AppointmentsApi(ApiClient.instance);
   static final consultations = ConsultationsApi(ApiClient.instance);
   static final prescriptions = PrescriptionsApi(ApiClient.instance);

@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
@@ -76,11 +77,36 @@ class CallTab extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'Acquiring WebRTC Session token...',
+                        'Connecting to video call...',
                         style: AppText.body(size: 12.5, color: AppColors.callTextLight),
                       ),
                       const SizedBox(height: 14),
                       SizedBox(width: 130, child: EkgLine(height: 16)),
+                    ],
+                  ),
+                ).animate().fadeIn(duration: 240.ms),
+
+              // Failed to connect
+              if (app.rtcState == 'failed')
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 68,
+                        height: 68,
+                        decoration: BoxDecoration(shape: BoxShape.circle, color: AppColors.red600.withValues(alpha: 0.16)),
+                        child: const Icon(Icons.error_outline, size: 30, color: AppColors.red600),
+                      ),
+                      const SizedBox(height: 12),
+                      Text('Could Not Connect', style: AppText.display(size: 15, color: Colors.white)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Check your connection and try again.',
+                        style: AppText.body(size: 12, color: AppColors.callTextMuted),
+                      ),
+                      const SizedBox(height: 14),
+                      AppButton(label: 'Retry', icon: const Icon(Icons.refresh), onPressed: app.beginCall),
                     ],
                   ),
                 ).animate().fadeIn(duration: 240.ms),
@@ -117,10 +143,9 @@ class CallTab extends StatelessWidget {
 
               // 3. Connected / Active Video Feed
               if (isCallActive) ...[
-                // Simulated patient camera stream — a real WebRTC remote
-                // track isn't available without a signaling backend, so
-                // this is a self-contained placeholder rather than a
-                // fetched stock photo (which would also fail offline).
+                // Real patient video track once the patient publishes one;
+                // otherwise an honest "not yet available" placeholder rather
+                // than a fabricated stream.
                 Positioned.fill(
                   child: Container(
                     decoration: const BoxDecoration(
@@ -131,8 +156,8 @@ class CallTab extends StatelessWidget {
                       ),
                     ),
                     alignment: Alignment.center,
-                    child: app.videoMuted
-                        ? null
+                    child: app.remoteVideoTrack != null
+                        ? lk.VideoTrackRenderer(app.remoteVideoTrack!)
                         : Container(
                             width: 84,
                             height: 84,
@@ -195,8 +220,8 @@ class CallTab extends StatelessWidget {
                   ),
                 ).animate().fadeIn(duration: 260.ms).slideY(begin: -0.1, end: 0, curve: Curves.easeOut),
 
-                // Center Indicator
-                if (app.videoMuted)
+                // Center Indicator — no incoming patient video yet.
+                if (app.remoteVideoTrack == null)
                   Center(
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -210,7 +235,7 @@ class CallTab extends StatelessWidget {
                           const Icon(Icons.videocam_off, size: 13, color: AppColors.callTextLight),
                           const SizedBox(width: 6),
                           Text(
-                            'Patient camera turned off',
+                            'Waiting for patient video...',
                             style: AppText.body(size: 12, color: AppColors.callTextLight),
                           ),
                         ],
@@ -218,7 +243,8 @@ class CallTab extends StatelessWidget {
                     ),
                   ).animate().fadeIn(duration: 200.ms),
 
-                // Doctor's local preview (Bottom-Right)
+                // Doctor's local preview (Bottom-Right) — real camera feed
+                // once published, else a muted placeholder.
                 Positioned(
                   bottom: 74,
                   right: 12,
@@ -226,23 +252,26 @@ class CallTab extends StatelessWidget {
                     width: 76,
                     height: 98,
                     alignment: Alignment.center,
+                    clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: AppColors.callSurfaceDarker,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1.5),
                       boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 4))],
                     ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(app.videoMuted ? Icons.videocam_off : Icons.person, size: 20, color: AppColors.callIconMuted),
-                        const SizedBox(height: 4),
-                        Text(
-                          app.videoMuted ? 'Muted' : 'You',
-                          style: AppText.body(size: 9, color: AppColors.callIconMuted, weight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
+                    child: app.localVideoTrack != null && !app.videoMuted
+                        ? ClipRRect(borderRadius: BorderRadius.circular(12), child: lk.VideoTrackRenderer(app.localVideoTrack!))
+                        : Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(app.videoMuted ? Icons.videocam_off : Icons.person, size: 20, color: AppColors.callIconMuted),
+                              const SizedBox(height: 4),
+                              Text(
+                                app.videoMuted ? 'Muted' : 'You',
+                                style: AppText.body(size: 9, color: AppColors.callIconMuted, weight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
                   ),
                 ),
 
@@ -363,11 +392,11 @@ class CallTab extends StatelessWidget {
               if (isCallActive) ...[
                 Expanded(
                   child: AppButton(
-                    label: 'Simulate Poor Network',
+                    label: 'Chat',
                     variant: AppButtonVariant.subtle,
-                    icon: const Icon(Icons.wifi_off),
+                    icon: const Icon(Icons.chat_bubble_outline),
                     block: true,
-                    onPressed: app.triggerPoorNetwork,
+                    onPressed: () => _openChat(context),
                   ),
                 ),
               ],
@@ -459,6 +488,115 @@ class CallTab extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+
+  void _openChat(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _ChatSheet(),
+    );
+  }
+}
+
+/// In-call async chat — `message:send`/`message:received` over the
+/// `/consultation` socket, persisted server-side on the consultation.
+class _ChatSheet extends StatefulWidget {
+  const _ChatSheet();
+
+  @override
+  State<_ChatSheet> createState() => _ChatSheetState();
+}
+
+class _ChatSheetState extends State<_ChatSheet> {
+  final _textCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    super.dispose();
+  }
+
+  void _send(AppState app) {
+    if (_textCtrl.text.trim().isEmpty) return;
+    app.sendConsultationMessage(_textCtrl.text);
+    _textCtrl.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        height: 420,
+        decoration: const BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+              child: Row(
+                children: [
+                  Expanded(child: Text('Chat', style: AppText.display(size: 15))),
+                  IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop()),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: AppColors.lineSoft),
+            Expanded(
+              child: app.inCallMessages.isEmpty
+                  ? Center(
+                      child: Text('No messages yet. Say hello to start the consultation.', style: AppText.body(size: 12.5, color: AppColors.ink400)),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      itemCount: app.inCallMessages.length,
+                      itemBuilder: (context, i) {
+                        final m = app.inCallMessages[i];
+                        final fromDoctor = m['senderRole'] == 'doctor';
+                        return Align(
+                          alignment: fromDoctor ? Alignment.centerRight : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
+                            decoration: BoxDecoration(
+                              color: fromDoctor ? AppColors.blue600 : AppColors.blue50,
+                              borderRadius: BorderRadius.circular(AppRadius.md),
+                            ),
+                            child: Text(
+                              (m['text'] as String?) ?? '',
+                              style: AppText.body(size: 13, color: fromDoctor ? Colors.white : AppColors.ink900),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _textCtrl,
+                      decoration: const InputDecoration(hintText: 'Type a message...'),
+                      onSubmitted: (_) => _send(app),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(icon: const Icon(Icons.send, size: 18), onPressed: () => _send(app)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -10,6 +10,14 @@ class ConsultationsApi {
     return result.asMap;
   }
 
+  /// `POST /consultations/:id/video/token` — a real LiveKit JWT (not the
+  /// simulated call this used to back). Returns `{token, livekitUrl,
+  /// roomName, consultationId, recordingEnabled}`.
+  Future<Map<String, dynamic>> getVideoToken(String consultationId) async {
+    final result = await _client.post('/consultations/$consultationId/video/token');
+    return result.asMap;
+  }
+
   /// Also flips `soapNote.doctorApproved = true` server-side on success —
   /// there's no response body to reflect that, so callers update local
   /// state optimistically.

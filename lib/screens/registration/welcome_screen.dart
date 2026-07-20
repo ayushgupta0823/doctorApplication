@@ -78,7 +78,13 @@ class WelcomeScreen extends StatelessWidget {
                       Row(
                         children: [
                           Text('to ', style: AppText.display(size: 30, color: Colors.white)),
-                          Text('HiDoctor', style: AppText.display(size: 30, color: Colors.white, weight: FontWeight.w800)),
+                          Flexible(
+                            child: Text(
+                              'MediConnectAI',
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.display(size: 30, color: Colors.white, weight: FontWeight.w800),
+                            ),
+                          ),
                         ],
                       ).animate().fadeIn(delay: 220.ms, duration: 400.ms),
                       const SizedBox(height: 20),

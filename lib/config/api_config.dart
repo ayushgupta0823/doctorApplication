@@ -1,21 +1,4 @@
-/// Backend + AI service endpoints and the temporary dev-auth override.
-///
-/// The OTP/login screen is intentionally still mocked (see `AppState.sendOtp`
-/// / `verifyOtp`), so it never produces a real token. Meanwhile every
-/// doctor-facing backend route requires a Clerk session JWT — the mobile JWT
-/// this app *could* mint has no path to the `doctor` role and is rejected by
-/// those routes outright (see `healthcare-api/AGENTS.md`'s auth truth table).
-/// Fixing that is a backend change that was explicitly ruled out for now.
-///
-/// So, until real login exists, real API calls authenticate with a
-/// hand-supplied Clerk JWT for a verified doctor test account, passed in at
-/// build/run time — never hardcoded in source. Grab one from the
-/// AI-Clinic-project website's network tab while signed in as a doctor
-/// (Clerk session tokens expire in ~60s and are normally auto-refreshed by
-/// the Clerk SDK; here you'll need to re-run with a fresh token when calls
-/// start 401ing).
-///
-/// Usage: flutter run --dart-define=DEV_CLERK_TOKEN=eyJ...
+/// Backend + AI service endpoints.
 class ApiConfig {
   ApiConfig._();
 
@@ -28,6 +11,10 @@ class ApiConfig {
     defaultValue: 'https://api.shikhartesting.dev/api/v1',
   );
 
+  /// Socket.IO connects to the bare server origin, not the REST `/api/v1`
+  /// prefix — matches the website's own `notificationSocket.js` derivation.
+  static String get socketBaseUrl => backendBaseUrl.replaceAll(RegExp(r'/api/v1/?$'), '');
+
   /// The AI microservice, called directly (no backend proxy), mirroring
   /// `AI-Clinic-project/src/pages/PatientDashboard.jsx` and
   /// `VoiceAssistant.jsx`. The deployed instance does not enforce
@@ -36,9 +23,4 @@ class ApiConfig {
     'AI_BASE_URL',
     defaultValue: 'https://ai.shikhartesting.dev',
   );
-
-  /// TEMPORARY. See file doc comment above. Empty until supplied.
-  static const String devClerkToken = String.fromEnvironment('DEV_CLERK_TOKEN');
-
-  static bool get hasDevToken => devClerkToken.isNotEmpty;
 }

@@ -83,6 +83,8 @@ class VideoCallScreen extends StatelessWidget {
         return 'Live';
       case 'reconnecting':
         return 'Reconnecting…';
+      case 'failed':
+        return 'Connection failed';
       default:
         return 'Not connected';
     }
@@ -96,6 +98,8 @@ class VideoCallScreen extends StatelessWidget {
         return AppColors.green600;
       case 'reconnecting':
         return AppColors.amber600;
+      case 'failed':
+        return AppColors.red600;
       default:
         return AppColors.ink400;
     }

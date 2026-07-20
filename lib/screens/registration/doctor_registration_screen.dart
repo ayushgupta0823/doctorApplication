@@ -1,12 +1,19 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../state/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_logo.dart';
 import '../../widgets/step_progress_indicator.dart';
 import 'registration_data.dart';
+
+/// The file-picker rows only need a short display name; the wizard itself
+/// keeps the full path (see [_DoctorRegistrationScreenState]) so the file can
+/// actually be uploaded, not just named.
+String _basename(String path) => path.split(RegExp(r'[\\/]')).last;
 
 /// The 4-step "Doctor Registration" wizard: Personal Details -> Credentials
 /// -> Practice Details -> Documents. Replaces the old NMC/signature/
@@ -249,36 +256,38 @@ class _DoctorRegistrationScreenState extends State<DoctorRegistrationScreen> {
   /// Opens the OS's real file picker (via `file_picker`) restricted to the
   /// document types a clinic would actually scan/photograph a credential as.
   /// A null result means the doctor cancelled the dialog — left untouched.
+  /// Keeps the full path (not just the display name) so it can genuinely be
+  /// uploaded at submit time.
   Future<void> _pickFile(String slot) async {
     setState(() => _uploadingSlot = slot);
-    String? fileName;
+    String? filePath;
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png'],
       );
-      fileName = result?.files.single.name;
+      filePath = result?.files.single.path;
     } catch (e) {
       if (mounted) setState(() => _error = "Couldn't open the file picker — ${e.toString()}");
     }
     if (!mounted) return;
     setState(() {
       _uploadingSlot = null;
-      if (fileName == null) return;
+      if (filePath == null) return;
       switch (slot) {
         case 'nmc':
-          _nmcCertificateFile = fileName;
+          _nmcCertificateFile = filePath;
           break;
         case 'govId':
-          _govIdFile = fileName;
+          _govIdFile = filePath;
           break;
         default:
-          _degreeCertificateFile = fileName;
+          _degreeCertificateFile = filePath;
       }
     });
   }
 
-  void _submit() async {
+  Future<void> _submit() async {
     if (_nmcCertificateFile == null) {
       setState(() => _error = 'Please upload your NMC / State Council Certificate.');
       return;
@@ -288,33 +297,38 @@ class _DoctorRegistrationScreenState extends State<DoctorRegistrationScreen> {
       _error = '';
     });
     final languages = _languagesCtrl.text.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (!mounted) return;
-    widget.onSubmitted(
-      RegistrationData(
-        firstName: _firstNameCtrl.text.trim(),
-        middleName: _middleNameCtrl.text.trim(),
-        lastName: _lastNameCtrl.text.trim(),
-        dateOfBirth: _dob,
-        gender: _gender,
-        contactPhone: _phoneCtrl.text.trim(),
-        officialEmail: _emailCtrl.text.trim(),
-        nmcRegistrationNumber: _nmcCtrl.text.trim(),
-        experienceYears: int.tryParse(_experienceCtrl.text.trim()) ?? 0,
-        specialties: _selectedSpecialties.toList(),
-        qualifications: _qualifications,
-        languages: languages,
-        clinicLocation: _clinicLocationCtrl.text.trim(),
-        state: _selectedState ?? '',
-        city: _selectedCity ?? '',
-        pincode: _pincodeCtrl.text.trim(),
-        videoFee: double.tryParse(_videoFeeCtrl.text.trim()) ?? 0,
-        inPersonFee: double.tryParse(_inPersonFeeCtrl.text.trim()) ?? 0,
-        nmcCertificateFile: _nmcCertificateFile,
-        govIdFile: _govIdFile,
-        degreeCertificateFile: _degreeCertificateFile,
-      ),
+    final data = RegistrationData(
+      firstName: _firstNameCtrl.text.trim(),
+      middleName: _middleNameCtrl.text.trim(),
+      lastName: _lastNameCtrl.text.trim(),
+      dateOfBirth: _dob,
+      gender: _gender,
+      contactPhone: _phoneCtrl.text.trim(),
+      officialEmail: _emailCtrl.text.trim(),
+      nmcRegistrationNumber: _nmcCtrl.text.trim(),
+      experienceYears: int.tryParse(_experienceCtrl.text.trim()) ?? 0,
+      specialties: _selectedSpecialties.toList(),
+      qualifications: _qualifications,
+      languages: languages,
+      clinicLocation: _clinicLocationCtrl.text.trim(),
+      state: _selectedState ?? '',
+      city: _selectedCity ?? '',
+      pincode: _pincodeCtrl.text.trim(),
+      videoFee: double.tryParse(_videoFeeCtrl.text.trim()) ?? 0,
+      inPersonFee: double.tryParse(_inPersonFeeCtrl.text.trim()) ?? 0,
+      nmcCertificateFile: _nmcCertificateFile,
+      govIdFile: _govIdFile,
+      degreeCertificateFile: _degreeCertificateFile,
     );
+
+    final error = await context.read<AppState>().submitDoctorApplication(data);
+    if (!mounted) return;
+    setState(() => _submitting = false);
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    widget.onSubmitted(data);
   }
 
   @override
@@ -888,7 +902,7 @@ class _DoctorRegistrationScreenState extends State<DoctorRegistrationScreen> {
           title: 'NMC / State Council Certificate',
           subtitle: 'Medical registration certificate',
           required: true,
-          fileName: _nmcCertificateFile,
+          fileName: _nmcCertificateFile == null ? null : _basename(_nmcCertificateFile!),
           uploading: _uploadingSlot == 'nmc',
           onTap: () => _pickFile('nmc'),
           onClear: () => setState(() => _nmcCertificateFile = null),
@@ -897,7 +911,7 @@ class _DoctorRegistrationScreenState extends State<DoctorRegistrationScreen> {
         _UploadRow(
           title: 'Government ID Proof (optional)',
           subtitle: 'Aadhaar / Passport / PAN',
-          fileName: _govIdFile,
+          fileName: _govIdFile == null ? null : _basename(_govIdFile!),
           uploading: _uploadingSlot == 'govId',
           onTap: () => _pickFile('govId'),
           onClear: () => setState(() => _govIdFile = null),
@@ -906,7 +920,7 @@ class _DoctorRegistrationScreenState extends State<DoctorRegistrationScreen> {
         _UploadRow(
           title: 'Degree Certificate (optional)',
           subtitle: 'MBBS / MD / MS degree proof',
-          fileName: _degreeCertificateFile,
+          fileName: _degreeCertificateFile == null ? null : _basename(_degreeCertificateFile!),
           uploading: _uploadingSlot == 'degree',
           onTap: () => _pickFile('degree'),
           onClear: () => setState(() => _degreeCertificateFile = null),

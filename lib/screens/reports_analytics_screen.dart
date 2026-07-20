@@ -66,13 +66,15 @@ class _ReportsAnalyticsScreenState extends State<ReportsAnalyticsScreen> {
       return current.where((h) => h.createdAt != null && h.createdAt!.isAfter(bucketStart) && !h.createdAt!.isAfter(bucketEnd)).length;
     });
 
+    // Case-mix is no longer shown on-screen (matches the website dropping its
+    // "Patient Case-Mix" widget) but the breakdown is still useful in the
+    // exported PDF report, so the computation stays.
     final conditionCounts = <String, int>{};
     for (final h in current) {
       for (final d in h.diagnosis) {
         conditionCounts[d] = (conditionCounts[d] ?? 0) + 1;
       }
     }
-    final totalConditions = conditionCounts.values.fold<int>(0, (a, b) => a + b);
     final topConditions = conditionCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
     // Consultation mode split — real data already on each history record's
@@ -152,70 +154,6 @@ class _ReportsAnalyticsScreenState extends State<ReportsAnalyticsScreen> {
             ].animate(interval: 60.ms).fadeIn(duration: 260.ms).slideY(begin: 0.08, end: 0, curve: Curves.easeOut),
           ),
           const SizedBox(height: 20),
-          Text('TOP CONDITIONS', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
-          const SizedBox(height: 10),
-          AppCard(
-            padding: const EdgeInsets.all(16),
-            child: topConditions.isEmpty
-                ? Text('Not enough consultation history yet to compute trends.', style: AppText.body(size: 12.5, color: AppColors.ink400))
-                : Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 96,
-                        height: 96,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            CustomPaint(
-                              size: const Size(96, 96),
-                              painter: _DonutPainter(topConditions.map((e) => e.value.toDouble()).toList()),
-                            ),
-                            Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text('$totalConditions', style: AppText.display(size: 18, color: AppColors.blue900)),
-                                Text('Total', style: AppText.body(size: 9, color: AppColors.ink400)),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: List.generate(topConditions.length.clamp(0, 5), (i) {
-                            final entry = topConditions[i];
-                            final pct = totalConditions == 0 ? 0 : (entry.value / totalConditions * 100).round();
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 3),
-                              child: Row(
-                                children: [
-                                  Container(width: 8, height: 8, decoration: BoxDecoration(color: _donutColors[i % _donutColors.length], shape: BoxShape.circle)),
-                                  const SizedBox(width: 8),
-                                  Expanded(child: Text('${i + 1}. ${entry.key}', style: AppText.body(size: 11.5), overflow: TextOverflow.ellipsis)),
-                                  Text('$pct%', style: AppText.body(size: 11, weight: FontWeight.bold, color: AppColors.ink600)),
-                                ],
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                    ],
-                  ),
-          ).animate().fadeIn(delay: 80.ms, duration: 280.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
-          const SizedBox(height: 20),
-
-          Text('CONSULTATION MODE', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
-          const SizedBox(height: 10),
-          AppCard(
-            padding: const EdgeInsets.all(16),
-            child: consultations == 0
-                ? Text('Not enough consultation history yet.', style: AppText.body(size: 12.5, color: AppColors.ink400))
-                : _ModeSplitBar(videoCount: videoCount, inPersonCount: inPersonCount),
-          ).animate().fadeIn(delay: 140.ms, duration: 280.ms).slideY(begin: 0.06, end: 0, curve: Curves.easeOut),
-          const SizedBox(height: 20),
 
           Text('ESTIMATED EARNINGS', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
           const SizedBox(height: 10),
@@ -280,69 +218,6 @@ class _ReportsAnalyticsScreenState extends State<ReportsAnalyticsScreen> {
   }
 }
 
-const _donutColors = [AppColors.blue600, AppColors.teal500, AppColors.amber600, AppColors.red600, AppColors.green600];
-
-class _ModeSplitBar extends StatelessWidget {
-  const _ModeSplitBar({required this.videoCount, required this.inPersonCount});
-  final int videoCount;
-  final int inPersonCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final total = videoCount + inPersonCount;
-    final videoPct = total == 0 ? 0.0 : videoCount / total;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(100),
-          child: SizedBox(
-            height: 10,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Stack(
-                  children: [
-                    Container(color: AppColors.teal500),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Container(width: constraints.maxWidth * videoPct, height: 10, color: AppColors.blue600),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(child: _ModeLegend(color: AppColors.blue600, label: 'Video', count: videoCount)),
-            Expanded(child: _ModeLegend(color: AppColors.teal500, label: 'In-Person', count: inPersonCount)),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _ModeLegend extends StatelessWidget {
-  const _ModeLegend({required this.color, required this.label, required this.count});
-  final Color color;
-  final String label;
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 6),
-        Text('$label · $count', style: AppText.body(size: 11.5, weight: FontWeight.w600, color: AppColors.ink600)),
-      ],
-    );
-  }
-}
-
 class _StatCard extends StatelessWidget {
   const _StatCard({required this.label, required this.value, required this.trend, required this.spark});
   final String label;
@@ -388,30 +263,4 @@ class _StatCard extends StatelessWidget {
       ),
     );
   }
-}
-
-class _DonutPainter extends CustomPainter {
-  _DonutPainter(this.values);
-  final List<double> values;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final total = values.fold<double>(0, (a, b) => a + b);
-    if (total == 0) return;
-    final rect = Rect.fromLTWH(4, 4, size.width - 8, size.height - 8);
-    var start = -90.0;
-    for (var i = 0; i < values.length; i++) {
-      final sweep = values[i] / total * 360;
-      final paint = Paint()
-        ..color = _donutColors[i % _donutColors.length]
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 14
-        ..strokeCap = StrokeCap.butt;
-      canvas.drawArc(rect, start * 3.1415926535 / 180, sweep * 3.1415926535 / 180, false, paint);
-      start += sweep;
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DonutPainter oldDelegate) => oldDelegate.values != values;
 }

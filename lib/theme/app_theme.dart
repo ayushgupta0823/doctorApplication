@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Color palette ported 1:1 from the `:root` CSS custom properties
-/// in doctor_app.html.
+/// Primary brand scale — ported from the website doctor dashboard's
+/// `--color-brand-*` tokens (`AI-Clinic-project/src/doctor/doctor.css`) so
+/// the app matches the site's actual current teal/green identity instead of
+/// the old doctor_app.html-prototype blue. Token names keep the `blue*`
+/// suffixes since ~50 files already reference them by name — only the values
+/// changed, so this is a full rebrand with no call-site churn.
 class AppColors {
   AppColors._();
 
-  static const blue900 = Color(0xFF0B2A52);
-  static const blue700 = Color(0xFF124A99);
-  static const blue600 = Color(0xFF1D6FE0);
-  static const blue500 = Color(0xFF3D8BFF);
-  static const blue100 = Color(0xFFE5F0FF);
-  static const blue50 = Color(0xFFF5F9FF);
+  static const blue900 = Color(0xFF08453C); // brand-900
+  static const blue700 = Color(0xFF0B6F5F); // brand-700
+  static const blue600 = Color(0xFF0D8C77); // brand-600 — primary
+  static const blue500 = Color(0xFF14A88F); // brand-500
+  static const blue100 = Color(0xFFD2F9EE); // brand-100
+  static const blue50 = Color(0xFFEEFDF9); // brand-50
 
   static const teal500 = Color(0xFF0EA5A4);
   static const teal100 = Color(0xFFE3F8F7);

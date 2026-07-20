@@ -59,7 +59,7 @@ The `auth.js` middleware:
 
 ### `optionalAuth` Caveat
 
-Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users — does NOT auto-provision. If a user has not yet called `/auth/sync`, `req.user` will be `undefined`.
+Used on `POST /hospitals/apply`, `POST /doctors/apply`, `GET /doctors/search`, `GET /doctors/:doctorId`, and `GET /invites/:token`. Tries a mobile JWT first, then Clerk, but only finds **existing** users — does NOT auto-provision, and never rejects the request even with no/invalid token. If a user has not yet called `/auth/sync` (or has no matching User), `req.user` will be `undefined` and the route still proceeds unauthenticated.
 
 ---
 
@@ -109,7 +109,7 @@ Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users
 
 ## 2. Mobile Auth APIs — `/api/v1/auth/mobile`
 
-> Phone + OTP authentication for the patient mobile app. No Clerk required.
+> Phone + OTP authentication, usable by both the patient and doctor Flutter apps. No Clerk required.
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|:---:|-------------|
@@ -125,12 +125,11 @@ Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users
 
 ### POST /auth/mobile/verify-otp
 ```json
-// Request Body
+// Request Body — there is no "role" field; role is never client-supplied.
 {
   "phone": "+919876543210",
   "otp": "123456",
-  "role": "patient",     // default: patient
-  "firstName": "Jane",
+  "firstName": "Jane",     // only used if this phone has no existing User
   "lastName": "Doe"
 }
 
@@ -140,10 +139,13 @@ Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users
   "data": {
     "accessToken": "<jwt>",
     "refreshToken": "<jwt>",
-    "user": { ... }
+    "user": { ... },
+    "isNewUser": false,
+    "hasProfile": true
   }
 }
 ```
+> Role resolution: an existing `User` keeps whatever role Mongo already has for them (`patient` or `doctor` both fall through to token issuance here — any other role, e.g. `hospital_admin`/`super_admin`, gets `403 ROLE_NOT_ALLOWED`). A **brand-new** phone number is always created as `role: 'patient'` — OTP itself can never mint a doctor account. Doctor role only ever comes from `POST /doctors/apply` approval or the hospital-invite application flow (§14) being approved; a doctor logs in with the *same* OTP endpoint once one of those has happened. `hasProfile` is always `true` for an existing doctor (a Doctor profile necessarily exists by the time the role is set) and reflects real profile-completeness for patients.
 
 ### POST /auth/mobile/google
 ```json
@@ -275,7 +277,13 @@ Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users
 | `GET` | `/doctors/me/patients` | ✅ | doctor | List all own patients |
 | `GET` | `/doctors/me/patients/:patientId` | ✅ | doctor | Get specific patient's clinical history |
 | `GET` | `/doctors/me/analytics` | ✅ | doctor | Personal analytics dashboard |
+| `GET` | `/doctors/me/reviews` | ✅ | doctor | List own patient reviews |
+| `POST` | `/doctors/me/reviews/:reviewId/reply` | ✅ | doctor | Reply to a patient review |
+| `GET` | `/doctors/me/payouts` | ✅ | doctor | List own payout history |
+| `POST` | `/doctors/me/payouts` | ✅ | doctor | Request a payout |
 | `POST` | `/doctors/me/esign/setup` | ✅ | doctor | Set up e-signature |
+
+> **Note:** every row in this section (and the equivalent doctor-side rows under Appointments, Prescriptions, AI, and Notifications) now accepts either a Clerk session JWT *or* our own mobile JWT (`authAny`) — both are mobile-app-usable. Only the **Super Admin** rows below, and hospital-admin-only endpoints elsewhere in this doc, remain Clerk-web-only (`authenticate`).
 
 ### Super Admin
 
@@ -400,6 +408,7 @@ Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users
 | `POST` | `/appointments/:appointmentId/checkin` | ✅ | patient | Check in for an appointment |
 | `POST` | `/appointments/waitlist` | ✅ | patient | Join appointment waitlist |
 | `DELETE` | `/appointments/waitlist/:appointmentId` | ✅ | patient | Leave appointment waitlist |
+| `POST` | `/appointments/me/:appointmentId/request-refund` | ✅ | patient | Request a refund for a cancelled/refundable appointment |
 
 ### POST /appointments — Request Body
 ```json
@@ -418,6 +427,8 @@ Used on `POST /hospitals/apply` and doctor search. Only finds **existing** users
 | Method | Endpoint | Auth | Role | Description |
 |--------|----------|:---:|------|-------------|
 | `GET` | `/appointments/doctor` | ✅ | doctor | Get all own appointments |
+| `GET` | `/appointments/doctor/revenue` | ✅ | doctor | Own revenue summary (used by Earnings) |
+| `POST` | `/appointments/walkin` | ✅ | doctor | Book a walk-in appointment for a patient physically present |
 | `PUT` | `/appointments/:appointmentId/confirm` | ✅ | doctor | Confirm appointment → status: `confirmed` |
 | `PUT` | `/appointments/:appointmentId/start` | ✅ | doctor | Start session → status: `in_progress` |
 | `PUT` | `/appointments/:appointmentId/complete` | ✅ | doctor | Mark completed → status: `completed` |
@@ -438,6 +449,7 @@ scheduled → confirmed → in_progress → completed
 | `GET` | `/appointments/:appointmentId` | ✅ | doctor, patient, hospital_admin | Get appointment by ID |
 | `GET` | `/appointments` | ✅ | super_admin, hospital_admin | List all platform appointments |
 | `PUT` | `/appointments/:appointmentId/force-cancel` | ✅ | super_admin | Force cancel any appointment |
+| `POST` | `/appointments/admin-book` | ✅ | hospital_admin | Book an appointment on behalf of an existing patient, assigning one of the hospital's own doctors |
 
 ---
 
@@ -461,12 +473,14 @@ scheduled → confirmed → in_progress → completed
   "data": {
     "token": "<livekit_jwt>",
     "livekitUrl": "wss://livekit.example.com",
-    "roomName": "consult-<consultationId>"
+    "roomName": "consult-<consultationId>",
+    "consultationId": "<consultationId>",
+    "recordingEnabled": true
   }
 }
 ```
 > Token TTL: **3600s** · Room format: `consult-{consultationId}`  
-> Falls back to `https://ai.shikhartesting.dev/ai/voice/token` if `LIVEKIT_API_KEY` is unset.
+> If `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` are unset, falls back to `POST {AI_SERVICE_URL}/voice/token` (env-configurable; defaults to `http://ai-service:8000`, **not** a hardcoded `ai.shikhartesting.dev` URL) and uses that response's `server_url` in place of `livekitUrl`.
 
 ### Clinical Entries (Doctor)
 
@@ -714,7 +728,11 @@ draft → approved
 | Method | Endpoint | Auth | Description |
 |--------|----------|:---:|-------------|
 | `GET` | `/invites/:token` | optional | Get invite context (public — renders accept page before sign-in) |
-| `POST` | `/invites/:token/accept` | ✅ | Accept invite — server-side mints `doctor` or `lab_technician` role |
+| `POST` | `/invites/:token/accept` | ✅ | Accept invite. **Lab technician invites only** — mints `lab_technician` role immediately. A `doctor`-type invite hitting this endpoint gets `400 USE_APPLICATION_FLOW`; doctors must go through the application flow below instead. |
+
+> All endpoints in this section now accept either a Clerk session JWT or our own mobile JWT (`authAny`) — needed so the Flutter doctor app can complete invite-accept onboarding without a Clerk-web session.
+>
+> A hospital admin can alternatively skip invites entirely via `POST /hospitals/me/doctors/add` (see §5 "Doctor Management by Hospital Admin") to add a doctor directly with no invite/application step — not part of this flow, but the other onboarding path a hospital admin may use.
 
 ### Doctor Application Flow (via Invite)
 
@@ -774,24 +792,35 @@ const socket = io('http://localhost:5000/consultation', {
 })
 ```
 
+> **Auth:** pass either our own mobile JWT (Flutter apps) or a Clerk session JWT (web) as `token` — the middleware tries the mobile secret first, then falls back to Clerk (mirrors the REST `authAny` precedence). There is a second namespace, `/notifications`, with the same auth scheme (see `emitNotification`/`notification:new` below) — used for the header/bell live notification feed, separate from in-consultation events.
+>
+> The event names below are read directly from `src/sockets/consultation.socket.js` — a previous version of this doc listed generic placeholder names (`join-room`, `send-message`, `soap-note-generated`, `typing`, `transcript-updated`) that never existed in code. Build against the table below, not those.
+
 ### Client → Server Events
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `join-room` | `{ consultationId }` | Join a consultation room |
-| `leave-room` | `{ consultationId }` | Leave a consultation room |
-| `send-message` | `{ consultationId, message }` | Send chat message in-room |
-| `typing` | `{ consultationId }` | Broadcast typing indicator |
+| `consultation:join` | `{ consultationId }` | Join a consultation room. Server checks the caller is the consultation's doctor/patient (or `super_admin`) before allowing the join. |
+| `consultation:leave` | `{ consultationId }` | Leave a consultation room. |
+| `message:send` | `{ consultationId, text }` | Send an async chat message; persisted onto `Consultation.messages`. |
+| `transcript:start` | `{ consultationId }` | Doctor (or `super_admin`) opens a Deepgram dual-channel STT session for this call. |
+| `transcript:audio` | `{ consultationId, role, chunk }` | Raw audio chunk for one speaker (`role`: `'doctor'` \| `'patient'`), routed to that speaker's Deepgram connection. |
+| `transcript:stop` | `{ consultationId }` | Doctor (or `super_admin`) ends the call: flushes Deepgram, persists `transcript.rawText`/`speakerDiarization`, triggers AI SOAP-note generation (non-fatal on failure). |
+| `consent:decision` | `{ consultationId, consented }` | Patient's recording-consent decision. |
 
 ### Server → Client Events
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `message` | `{ from, content, timestamp }` | Incoming chat message |
-| `user-joined` | `{ userId, role }` | A participant joined the room |
-| `user-left` | `{ userId }` | A participant left the room |
-| `soap-note-generated` | `{ soapNote }` | AI SOAP note pushed to doctor |
-| `transcript-updated` | `{ transcript }` | Live transcript update |
+| `participant:joined` | `{ userId, role }` | A participant joined the room (broadcast to the rest of the room). |
+| `participant:left` | `{ userId }` | A participant left the room. |
+| `message:received` | `{ message }` | Broadcast of a persisted chat message (the full stored message subdocument). |
+| `transcript:chunk` | `{ speaker, text, isFinal }` | Live interim/final transcript chunk from Deepgram, for one speaker. |
+| `consent:recorded` | `{ consented }` | Broadcast once the patient's consent decision is saved. |
+| `error` | `{ message }` | Generic error ack (e.g. consultation not found, not authorized). |
+| `notification:new` *(on the `/notifications` namespace, not `/consultation`)* | notification document | Pushed to a user's private room (keyed by `userId`) whenever `notification.service` persists a new notification. |
+
+There is no `soap-note-generated` or `transcript-updated` event — SOAP-note generation is triggered server-side after `transcript:stop` and delivered via the regular `GET /consultations/:id/summary` REST endpoint once ready, not pushed over the socket.
 
 ---
 
@@ -825,12 +854,14 @@ const socket = io('http://localhost:5000/consultation', {
 | Field | Type | Notes |
 |-------|------|-------|
 | `userId` | ObjectId | Ref: User |
-| `hospitalId` | Array | Ref: Hospital[] |
+| `hospitalId` | ObjectId, nullable | Ref: Hospital — `null` means solo practitioner, not an array |
 | `specialties` | Array | |
-| `nmcNumber` | String | NMC council registration |
-| `isVerified` | Boolean | |
-| `consultationFee` | Number | |
-| `rating` | Number | Aggregate |
+| `nmcRegistrationNumber` | String | Unique. NMC council registration — **not** `nmcNumber` |
+| `isVerified`, `nmcVerified` | Boolean | |
+| `consultationFeeInPerson`, `consultationFeeOnline` | Number | Two separate fee fields, not a single `consultationFee` |
+| `consultationType` | Enum | `in_person` \| `online` \| `both` |
+| `averageRating` | Number | Aggregate — **not** `rating` |
+| `isAcceptingPatients` | Boolean | |
 
 ### Hospital
 | Field | Type | Notes |
@@ -855,11 +886,12 @@ const socket = io('http://localhost:5000/consultation', {
 | Field | Type | Notes |
 |-------|------|-------|
 | `appointmentId` | ObjectId | |
-| `videoSession` | Object | `{ roomName, egress }` |
+| `videoSession` | Object | `{ roomName, egressId, recordingS3Url, recordingStartedAt, recordingEndedAt }` — the recording URL lives at `videoSession.recordingS3Url`, **not** a top-level `recordingUrl` |
+| `recordingConsent` | Object | Patient consent state for recording |
 | `soapNote` | Object | `{ S, O, A, P, isApproved }` |
-| `transcript` | String | AI-generated |
+| `transcript` | Object | `{ rawText, speakerDiarization, transcriptUrl }` — a structured object, **not** a plain String |
+| `transcriptExpiresAt` | Date | Retention cutoff (2 months); a cronjob clears transcript fields after this |
 | `diagnosis`, `messages` | Array | |
-| `recordingUrl` | String | S3 URL |
 
 ### Prescription
 | Field | Type | Notes |

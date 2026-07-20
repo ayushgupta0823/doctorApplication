@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
@@ -24,13 +26,36 @@ class QueueScreen extends StatefulWidget {
   State<QueueScreen> createState() => _QueueScreenState();
 }
 
-class _QueueScreenState extends State<QueueScreen> {
+class _QueueScreenState extends State<QueueScreen> with WidgetsBindingObserver {
   _QueueFilter _filter = _QueueFilter.all;
   bool _searching = false;
   final _searchController = TextEditingController();
+  Timer? _pollTimer;
+
+  // No live push for appointment updates yet (that's real-time-socket work,
+  // not built here) — so poll as a safety net, matching the website's fix
+  // for the same "new booking doesn't show up" gap, and refetch whenever the
+  // app comes back to the foreground.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) context.read<AppState>().refreshQueue();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      context.read<AppState>().refreshQueue();
+    }
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }

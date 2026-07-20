@@ -14,13 +14,6 @@ import 'settings/notification_preferences_screen.dart';
 import 'settings/security_privacy_screen.dart';
 import 'settings/working_hours_screen.dart';
 
-/// `0` (a genuinely rating-less new doctor) reads as "New" rather than a
-/// hollow "0.0" star rating.
-String _formatRating(dynamic raw) {
-  final rating = raw is num ? raw.toDouble() : 0.0;
-  return rating <= 0 ? 'New' : rating.toStringAsFixed(1);
-}
-
 class _DoctorStat extends StatelessWidget {
   const _DoctorStat({required this.icon, required this.iconColor, required this.value, required this.label});
   final IconData icon;
@@ -136,15 +129,9 @@ class ProfileScreen extends StatelessWidget {
           ),
           if (app.doctorProfile != null) ...[
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(child: _DoctorStat(icon: Icons.star_rounded, iconColor: AppColors.amber600, value: _formatRating(app.doctorProfile?['averageRating']), label: 'Rating')),
-                const SizedBox(width: 8),
-                Expanded(child: _DoctorStat(icon: Icons.reviews_outlined, iconColor: AppColors.blue600, value: '${app.doctorProfile?['totalReviews'] ?? 0}', label: 'Reviews')),
-                const SizedBox(width: 8),
-                Expanded(child: _DoctorStat(icon: Icons.event_available_outlined, iconColor: AppColors.green600, value: '${app.doctorProfile?['totalConsultations'] ?? 0}', label: 'Consultations')),
-              ],
-            ),
+            // The doctor dashboard shows no ratings/reviews anywhere (matches
+            // the website) — Consultations is the only profile stat left.
+            _DoctorStat(icon: Icons.event_available_outlined, iconColor: AppColors.green600, value: '${app.doctorProfile?['totalConsultations'] ?? 0}', label: 'Consultations'),
           ],
           const SizedBox(height: 18),
           AppCard(

@@ -8,8 +8,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 
 import 'package:mediconnect_doctor_app/main.dart';
+import 'package:mediconnect_doctor_app/state/app_state.dart';
 import 'package:mediconnect_doctor_app/widgets/app_card.dart';
 
 void main() {
@@ -52,6 +54,29 @@ void main() {
     ];
   });
 
+  // flutter_secure_storage's platform channel is also unimplemented here —
+  // without a mock, `read`/`write` never resolve, which now matters: at
+  // launch `AppState._bootstrapSession` awaits `read` to decide the auth
+  // screen, and a permanently-pending platform call would leave a Timer
+  // scheduled past the end of the test (its 5s `.timeout` guard), which
+  // `flutter_test` flags as a leaked timer between tests.
+  const secureStorageChannel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+  TestWidgetsFlutterBinding.ensureInitialized()
+      .defaultBinaryMessenger
+      .setMockMethodCallHandler(secureStorageChannel, (call) async {
+    switch (call.method) {
+      case 'read':
+      case 'containsKey':
+        return null;
+      case 'readAll':
+        return <String, String>{};
+      case 'isProtectedDataAvailable':
+        return true;
+      default:
+        return null; // write / delete / deleteAll
+    }
+  });
+
   Future<void> useTallSurface(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(500, 3500));
     tester.view.physicalSize = const Size(500, 3500);
@@ -62,103 +87,29 @@ void main() {
     });
   }
 
-  // Helper to drive Welcome -> the 4-step Doctor Registration wizard and
-  // land on the Home tab. Every text field is addressed by its position in
-  // the widget tree (documented inline) since several steps reuse hint
-  // text/labels across fields.
+  // Jumps straight to a signed-in `AuthStage` via `AppState`'s test-only
+  // backdoor (see `debugSignInForTests`) rather than driving a real OTP
+  // login or the registration wizard — widget tests exercise app *screens*,
+  // not the live backend network round-trip (that's covered by manual
+  // device testing per the migration plan's verification section). Kept the
+  // name `registerAndOnboard` since ~15 tests already call it to reach Home.
   Future<void> registerAndOnboard(WidgetTester tester) async {
-    // Welcome screen.
-    await tester.tap(find.text('Registration Profile'));
+    final app = Provider.of<AppState>(tester.element(find.byType(MaterialApp)), listen: false);
+    app.debugSignInForTests();
     await tester.pumpAndSettle();
-
-    // ---- Step 1: Personal Details ----
-    // TextField order: First Name(0), Middle Name(1), Last Name(2),
-    // Contact Phone(3), Official Email(4), Password(5), Confirm Password(6).
-    await tester.enterText(find.byType(TextField).at(0), 'Ayush');
-    await tester.enterText(find.byType(TextField).at(2), 'Gupta');
-
-    await tester.tap(find.text('Select date'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
-
-    // Gender is the only dropdown on this step.
-    await tester.tap(find.byType(DropdownButtonFormField<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Male').last);
-    await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextField).at(3), '9876543210');
-    await tester.enterText(find.byType(TextField).at(4), 'ayush@clinic.com');
-    await tester.enterText(find.byType(TextField).at(5), 'secret123');
-    await tester.enterText(find.byType(TextField).at(6), 'secret123');
-
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-
-    // ---- Step 2: Credentials ----
-    // TextField order: NMC Number(0), Experience(1), specialty search(2),
-    // Languages(3).
-    await tester.enterText(find.byType(TextField).at(0), 'NMC-2016-MH-08421');
-    await tester.enterText(find.byType(TextField).at(1), '8');
-    await tester.tap(find.text('Cardiology'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).at(3), 'English, Hindi');
-
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-
-    // ---- Step 3: Practice Details ----
-    // TextField order: Clinic Location(0), Pincode(1), Video Fee(2),
-    // In-person Fee(3) — the fee fields default to "500" so they're left as-is.
-    await tester.enterText(find.byType(TextField).at(0), 'Sunrise Clinic, MG Road');
-
-    // State and City are the only two dropdowns on this step (State first).
-    await tester.tap(find.byType(DropdownButtonFormField<String>).at(0));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Maharashtra').last);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byType(DropdownButtonFormField<String>).at(1));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Mumbai').last);
-    await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextField).at(1), '400069');
-
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-
-    // ---- Step 4: Documents ----
-    // Only the first (required NMC/State Council Certificate) upload is
-    // needed to unlock Submit Application.
-    await tester.tap(find.text('Click to upload').first);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Submit Application'));
-    // Not pumpAndSettle here: the success screen below runs a
-    // Timer.periodic for its auto-continue countdown, which never
-    // "settles" on its own. Pump just enough real time for the wizard's
-    // own 400ms submit delay and the stage cross-fade to resolve instead.
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(find.text('Registration Submitted!'), findsOneWidget);
-    await tester.tap(find.textContaining('Continue to Dashboard'));
-    await tester.pumpAndSettle();
-
-    // Home is a permanent bottom-nav tab now, not a one-time landing
-    // screen — continuing from the success summary lands directly on it.
   }
 
-  testWidgets('App boots on the Welcome screen, completes registration, and lands on the Home tab',
+  testWidgets('App boots on the Login screen; a signed-in session lands on the Home tab',
       (WidgetTester tester) async {
     await useTallSurface(tester);
     await tester.pumpWidget(const MediConnectDoctorApp());
-    await tester.pump();
+    // `_bootstrapSession` is async (even a fast secure-storage-unavailable
+    // failure resolves on a later microtask) — settle past the checking-
+    // session splash before asserting the logged-out screen.
+    await tester.pumpAndSettle();
 
-    expect(find.text('Welcome'), findsOneWidget);
-    expect(find.text('Registration Profile'), findsOneWidget);
+    // Logged out at fresh boot — no saved session in the test sandbox.
+    expect(find.text('Send OTP'), findsOneWidget);
 
     await registerAndOnboard(tester);
 
@@ -178,6 +129,13 @@ void main() {
     await tester.pumpWidget(const MediConnectDoctorApp());
     await tester.pump();
 
+    // Signed in but no application yet -> onboarding choice -> solo self-apply -> Welcome -> wizard.
+    final app = Provider.of<AppState>(tester.element(find.byType(MaterialApp)), listen: false);
+    app.debugSignInForTests(stage: AuthStage.needsOnboarding);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Apply as an independent doctor'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Registration Profile'));
     await tester.pumpAndSettle();
 
@@ -315,9 +273,14 @@ void main() {
     await tester.tap(find.byTooltip('Video call'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Join Call'));
+    // "Join Call" would try a real LiveKit connection (camera/mic/network
+    // the widget-test sandbox doesn't have) — jump straight to "connected"
+    // via the test backdoor instead, since this test is really about the
+    // join/leave-confirmation UX, not live media. Its call-duration ticker
+    // runs every second forever while "connected", so pump a bounded amount
+    // rather than pumpAndSettle (which would never see "no more frames").
+    Provider.of<AppState>(tester.element(find.byType(MaterialApp)), listen: false).debugConnectCallForTests();
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 1100)); // wait for token
     expect(find.text('LIVE CALL'), findsOneWidget);
 
     // Leaving the call screen mid-call asks for confirmation.
@@ -505,6 +468,9 @@ void main() {
     await tester.tap(find.text('Reports & Analytics'));
     await tester.pumpAndSettle();
 
-    expect(find.text('TOP CONDITIONS'), findsOneWidget);
+    // Case-mix/consultation-mix widgets were dropped from this screen to
+    // match the website's trimmed Analytics page — the estimated-earnings
+    // section is what's left to assert against.
+    expect(find.text('ESTIMATED EARNINGS'), findsOneWidget);
   });
 }

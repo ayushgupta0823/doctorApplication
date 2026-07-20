@@ -5,6 +5,16 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- LiveKit video consultation call quality — audio routing (speaker/
+         earpiece/bluetooth headset) and network-change handling during a
+         call. Screen-share's own foreground-service/media-projection
+         permissions are deliberately not added here — that's a separate,
+         larger native setup (see AppState.toggleShare's doc comment). -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
     <application
         android:label="MediConnectAI"
         android:name="${applicationName}"

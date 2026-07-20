@@ -1,9 +1,44 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
+
 import 'api_client.dart';
 
-/// `/api/v1/doctors/me/*` — self-service doctor profile endpoints.
+/// `/api/v1/doctors/*` — self-service doctor profile endpoints, plus the
+/// guest-friendly solo-apply flow.
 class DoctorsApi {
   DoctorsApi(this._client);
   final ApiClient _client;
+
+  /// `POST /doctors/apply` (`optionalAuth`) — submits a solo-doctor
+  /// application. Called only while logged in (via mobile JWT), so the
+  /// application is linked to `req.user.userId` immediately rather than by
+  /// email at verification time.
+  Future<Map<String, dynamic>> apply(Map<String, dynamic> body) async {
+    final result = await _client.post('/doctors/apply', body: body);
+    return result.asMap;
+  }
+
+  /// `GET /doctors/me/application-status` — `hasApplication`/`isVerified` for
+  /// a solo applicant awaiting super-admin review. 404/empty before any
+  /// application exists.
+  Future<Map<String, dynamic>> getMyApplicationStatus() async {
+    final result = await _client.get('/doctors/me/application-status');
+    return result.asMap;
+  }
+
+  /// `POST /hospitals/upload-document?type=` — shared upload endpoint used by
+  /// both the solo-apply and hospital-invite document steps (multer field
+  /// name is `document`; `type` rides the query string, matching
+  /// `AI-Clinic-project/src/lib/api.js`'s `hospitalsApi.uploadDocument`).
+  /// Returns the S3 URL.
+  Future<String> uploadDocument(File file, String docType) async {
+    final formData = FormData.fromMap({
+      'document': await MultipartFile.fromFile(file.path, filename: file.path.split(Platform.pathSeparator).last),
+    });
+    final result = await _client.postMultipart('/hospitals/upload-document?type=$docType', formData);
+    return result.asMap['url'] as String? ?? '';
+  }
 
   Future<Map<String, dynamic>> getMyProfile() async {
     final result = await _client.get('/doctors/me/profile');

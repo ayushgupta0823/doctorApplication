@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "com.example.mediconnect_doctor_app"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_webrtc (a livekit_client dependency) requires compileSdk 36+;
+    // override Flutter's own default (34) rather than waiting for it to catch up.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

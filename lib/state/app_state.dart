@@ -1,19 +1,47 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:socket_io_client/socket_io_client.dart' as sio;
 
 import '../config/api_config.dart';
 import '../data/api/api.dart';
+import '../data/api/api_client.dart';
 import '../data/mock_data.dart';
 import '../models/models.dart';
+import '../screens/registration/registration_data.dart';
 
 enum RootTab { home, queue, patients, calendar, more }
 
 enum ConsultSubTab { prescription, labTests, reports, history }
+
+/// Which pre-main-app screen [RootShell] should show. Resolved at launch
+/// (from a saved session) and after every login/logout/apply/verify.
+enum AuthStage {
+  /// Restoring a saved session — show a splash/loading state.
+  checkingSession,
+
+  /// No valid session — show the phone/OTP login screen.
+  loggedOut,
+
+  /// Logged in, but this account has no doctor application yet — show the
+  /// onboarding choice (solo self-apply vs hospital invite).
+  needsOnboarding,
+
+  /// Logged in, application submitted, awaiting super-admin/hospital-admin
+  /// review — show a "pending verification" screen.
+  pendingReview,
+
+  /// Logged in and `role == doctor` — show the main app.
+  ready,
+}
 
 /// Central app state managing all authentication, onboarding, dashboard,
 /// queue, WebRTC call, AI scribe, prescription signing, roster, and compliance logic.
@@ -36,14 +64,10 @@ class AppState extends ChangeNotifier {
     hydrateQueueCache();
     hydrateSignatureCache();
     hydrateConsultationPreferences();
-    // Fire-and-forget: replace the mock seed above with real data. If these
-    // fail (no dev auth token configured, network down), the mock/cached
-    // data above stays on screen rather than leaving a blank UI — see
-    // `_describeError`.
-    unawaited(loadDoctorProfile());
-    unawaited(refreshQueue());
-    unawaited(loadPatientHistory());
-    unawaited(loadNotifications());
+    _wireApiAuth();
+    // Restores a saved session (if any) and routes to the right screen —
+    // the mock/cached data above stays on screen until that resolves.
+    unawaited(_bootstrapSession());
   }
 
   // ---- connectivity & offline cache ----
@@ -122,9 +146,283 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // ---- authentication & onboarding (still mocked — see ApiConfig) ----
-  bool isLoggedIn = false;
-  bool isOnboarded = false;
+  // ---- authentication (POST /auth/mobile/send-otp + verify-otp) ----
+  static const _kAccessTokenKey = 'auth_access_token';
+  static const _kRefreshTokenKey = 'auth_refresh_token';
+
+  AuthStage authStage = AuthStage.checkingSession;
+  String? _accessToken;
+  String? _refreshToken;
+  bool otpSending = false;
+  bool otpVerifying = false;
+  String? devOtp;
+
+  /// Wires the shared [ApiClient] to this instance's token state — set once,
+  /// not re-created per request. [ApiClient] itself holds no session state.
+  void _wireApiAuth() {
+    ApiClient.instance.getAccessToken = () => _accessToken;
+    ApiClient.instance.onUnauthorized = _tryRefreshToken;
+  }
+
+  Future<void> _persistTokens() async {
+    try {
+      await _secureStorage.write(key: _kAccessTokenKey, value: _accessToken);
+      await _secureStorage.write(key: _kRefreshTokenKey, value: _refreshToken);
+    } catch (_) {
+      // Best-effort — the session still works for this run even if it can't
+      // be persisted, it just won't survive an app restart.
+    }
+  }
+
+  /// Restores a saved session at launch, if any, then routes to the right
+  /// [AuthStage].
+  Future<void> _bootstrapSession() async {
+    try {
+      // A platform channel with no native implementation (widget-test
+      // sandbox, or a genuinely wedged secure-storage plugin on-device)
+      // never rejects — it just never resolves. A short timeout keeps a
+      // doctor from being stuck on the checking-session splash forever;
+      // worst case they just see the login screen and sign in again.
+      _accessToken = await _secureStorage.read(key: _kAccessTokenKey).timeout(const Duration(seconds: 5));
+      _refreshToken = await _secureStorage.read(key: _kRefreshTokenKey).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Secure storage unavailable/timed out — treat as a fresh, logged-out session.
+    }
+    if (_accessToken == null || _refreshToken == null) {
+      authStage = AuthStage.loggedOut;
+      notifyListeners();
+      return;
+    }
+    await _resolveSessionStage();
+  }
+
+  /// `POST /auth/mobile/send-otp`.
+  Future<bool> sendOtp(String phone) async {
+    otpSending = true;
+    devOtp = null;
+    notifyListeners();
+    try {
+      final result = await Api.mobileAuth.sendOtp(phone);
+      // Only present while SMS isn't configured server-side — see
+      // `mobileAuth.controller.js::sendOtp`'s `devOtp` field.
+      devOtp = result['devOtp'] as String?;
+      return true;
+    } catch (e) {
+      _pushNotification(_describeError(e));
+      return false;
+    } finally {
+      otpSending = false;
+      notifyListeners();
+    }
+  }
+
+  /// `POST /auth/mobile/verify-otp` — on success, persists tokens and routes
+  /// straight to the right [AuthStage] (main app / onboarding choice /
+  /// pending review), so the login screen never has to know which.
+  Future<bool> verifyOtp({required String phone, required String otp}) async {
+    otpVerifying = true;
+    notifyListeners();
+    try {
+      final result = await Api.mobileAuth.verifyOtp(phone: phone, otp: otp);
+      _accessToken = result['accessToken'] as String?;
+      _refreshToken = result['refreshToken'] as String?;
+      if (_accessToken == null || _refreshToken == null) {
+        _pushNotification('Login failed — please try again.');
+        return false;
+      }
+      await _persistTokens();
+      logAuditEvent('Logged in via OTP');
+      await _resolveSessionStage();
+      return true;
+    } catch (e) {
+      _pushNotification(_describeError(e));
+      return false;
+    } finally {
+      otpVerifying = false;
+      notifyListeners();
+    }
+  }
+
+  /// Public entry point for screens that want to re-check the session (e.g.
+  /// [PendingReviewScreen]'s "Check Status" button) without duplicating the
+  /// resolution logic below.
+  Future<void> refreshSessionStage() => _resolveSessionStage();
+
+  /// Test-only backdoor: jumps straight to [stage] without a real OTP
+  /// login/network round-trip. Widget tests exercise app *screens*, not the
+  /// live backend — that's covered by manual/device testing instead (see the
+  /// migration plan's verification section).
+  @visibleForTesting
+  void debugSignInForTests({AuthStage stage = AuthStage.ready, Map<String, dynamic>? profile}) {
+    _accessToken = 'debug-test-token';
+    _refreshToken = 'debug-test-refresh-token';
+    authStage = stage;
+    if (stage == AuthStage.ready) {
+      doctorProfile = profile ??
+          {
+            'firstName': 'Ayush',
+            'lastName': 'Gupta',
+            'nmcRegistrationNumber': 'NMC-2016-MH-08421',
+            'consultationFeeInPerson': 500,
+            'consultationFeeOnline': 500,
+          };
+    }
+    notifyListeners();
+  }
+
+  /// Tries `GET /doctors/me/profile` first — success means `role == doctor`
+  /// already (that route is `authorize('doctor')`-gated), so the account is
+  /// fully onboarded. A 403 means authenticated but not yet a doctor, so the
+  /// application status decides between [AuthStage.needsOnboarding] and
+  /// [AuthStage.pendingReview]. Any other failure (network) keeps the
+  /// session as [AuthStage.ready] rather than bouncing back to login for a
+  /// connectivity blip — per-screen loads already handle that gracefully.
+  Future<void> _resolveSessionStage() async {
+    try {
+      doctorProfile = await Api.doctors.getMyProfile();
+      authStage = AuthStage.ready;
+      notifyListeners();
+      unawaited(refreshQueue());
+      unawaited(loadPatientHistory());
+      unawaited(loadNotifications());
+      unawaited(initPushNotifications());
+    } on ApiException catch (e) {
+      if (e.statusCode == 403) {
+        await _refreshApplicationStage();
+        return;
+      }
+      if (e.isUnauthorized) return; // onUnauthorized already handled/logged out
+      authStage = AuthStage.ready;
+      notifyListeners();
+    } catch (_) {
+      authStage = AuthStage.ready;
+      notifyListeners();
+    }
+  }
+
+  /// `GET /doctors/me/application-status` — distinguishes "never applied"
+  /// from "applied, awaiting review" for an authenticated non-doctor account.
+  Future<void> _refreshApplicationStage() async {
+    try {
+      final status = await Api.doctors.getMyApplicationStatus();
+      authStage = status['hasApplication'] == true ? AuthStage.pendingReview : AuthStage.needsOnboarding;
+    } catch (_) {
+      authStage = AuthStage.needsOnboarding;
+    }
+    notifyListeners();
+  }
+
+  // ---- push notifications (PUT/DELETE /auth/fcm-token) ----
+  String? _fcmToken;
+  StreamSubscription<String>? _fcmTokenRefreshSub;
+
+  /// Requests notification permission and registers this device's FCM token
+  /// once signed in. Firebase itself is initialized in `main.dart`, guarded
+  /// there — if no real Firebase project config has been dropped in yet
+  /// (see that file's comment), every call here just throws and is caught,
+  /// so a missing config degrades to "no push" rather than crashing.
+  Future<void> initPushNotifications() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      final settings = await messaging.requestPermission(alert: true, badge: true, sound: true);
+      notificationsGranted = settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+      notifyListeners();
+      if (!notificationsGranted) return;
+
+      final token = await messaging.getToken();
+      if (token != null) await _registerPushToken(token);
+
+      await _fcmTokenRefreshSub?.cancel();
+      _fcmTokenRefreshSub = messaging.onTokenRefresh.listen(_registerPushToken);
+    } catch (e) {
+      logAuditEvent('Push notification setup skipped: ${_describeError(e)}');
+    }
+  }
+
+  Future<void> _registerPushToken(String token) async {
+    try {
+      await Api.auth.registerFcmToken(token, defaultTargetPlatform.name);
+      _fcmToken = token;
+    } catch (e) {
+      logAuditEvent('FCM token registration failed: ${_describeError(e)}');
+    }
+  }
+
+  Future<void> _removePushToken() async {
+    await _fcmTokenRefreshSub?.cancel();
+    _fcmTokenRefreshSub = null;
+    final token = _fcmToken;
+    if (token == null) return;
+    try {
+      await Api.auth.removeFcmToken(token);
+    } catch (_) {
+      // Best-effort — a stale token left registered just means one device
+      // that may get an occasional push after logout, not a functional bug.
+    } finally {
+      _fcmToken = null;
+    }
+  }
+
+  /// Refreshes the access token on a 401 from any authenticated call (see
+  /// `ApiClient.onUnauthorized`); logs out if the refresh token is itself
+  /// invalid/expired, since that means the session is truly dead.
+  Future<bool> _tryRefreshToken() async {
+    final refreshToken = _refreshToken;
+    if (refreshToken == null) return false;
+    try {
+      _accessToken = await Api.mobileAuth.refresh(refreshToken);
+      await _persistTokens();
+      return true;
+    } catch (_) {
+      await logout();
+      return false;
+    }
+  }
+
+  Future<void> logout() async {
+    if (rtcState != 'disconnected') await _teardownCall();
+    await _removePushToken();
+    _accessToken = null;
+    _refreshToken = null;
+    doctorProfile = null;
+    authStage = AuthStage.loggedOut;
+    nmcNumber = '';
+    isNmcVerified = false;
+    digitalSignature = '';
+    notificationsGranted = false;
+    cameraMicGranted = false;
+    isAppLocked = false;
+    regFirstName = '';
+    regMiddleName = '';
+    regLastName = '';
+    regDateOfBirth = null;
+    regGender = '';
+    regContactPhone = '';
+    regOfficialEmail = '';
+    regExperienceYears = 0;
+    regSpecialties = [];
+    regQualifications = [];
+    regLanguages = [];
+    regClinicLocation = '';
+    regState = '';
+    regCity = '';
+    regPincode = '';
+    regVideoFee = 500;
+    regInPersonFee = 500;
+    regNmcCertificateFile = null;
+    regGovIdFile = null;
+    regDegreeCertificateFile = null;
+    _resetConsultDraft();
+    logAuditEvent('Logged out');
+    notifyListeners();
+    try {
+      await _secureStorage.delete(key: _kAccessTokenKey);
+      await _secureStorage.delete(key: _kRefreshTokenKey);
+      await _secureStorage.delete(key: _kSignatureKey);
+    } catch (_) {}
+  }
+
   String nmcNumber = '';
   bool isNmcVerified = false;
   String digitalSignature = '';
@@ -239,12 +537,13 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// [weeklySchedule] maps each of [weekdays] to a list of `{start, end}`
-  /// (24h `HH:mm`) slot maps — an empty list means "closed that day".
-  Future<bool> saveAvailability(Map<String, List<Map<String, String>>> weeklySchedule) async {
+  /// [weeklySchedule] maps each of [weekdays] to a list of `{start, end, mode}`
+  /// (24h `HH:mm`, mode one of `online`/`in_person`/`both`) range maps — an
+  /// empty list means "closed that day".
+  Future<bool> saveAvailability(Map<String, List<Map<String, String>>> weeklySchedule, {required int slotDurationMinutes}) async {
     if (_blockIfOffline('Saving your working hours')) return false;
     try {
-      doctorAvailability = await Api.doctors.setMyAvailability({'weeklySchedule': weeklySchedule});
+      doctorAvailability = await Api.doctors.setMyAvailability({'weeklySchedule': weeklySchedule, 'slotDurationMinutes': slotDurationMinutes});
       logAuditEvent('Working hours updated');
       notifyListeners();
       return true;
@@ -267,20 +566,18 @@ class AppState extends ChangeNotifier {
   bool isLoadingQueue = false;
   DateTime lastUpdatedQueue = DateTime.now();
 
-  // ---- WebRTC call simulation ----
-  // NOTE: video calling stays simulated in this pass — wiring real LiveKit
-  // media requires the `livekit_client` package, device permission flows,
-  // and track rendering, which is a separate substantial effort from the
-  // REST data wiring done here. `POST /consultations/:id/video/token` is not
-  // called yet.
+  // ---- LiveKit video call (POST /consultations/:id/video/token) ----
   String rtcState = 'disconnected'; // disconnected, connecting, connected, reconnecting, failed
   int callSeconds = 0;
   Timer? _callTimer;
-  Timer? _transcriptTimer;
   bool audioMuted = false;
   bool videoMuted = false;
   bool screenSharing = false;
-  bool simulatePoorNetworkMode = false;
+  lk.Room? _room;
+  lk.EventsListener<lk.RoomEvent>? _roomListener;
+  lk.VideoTrack? localVideoTrack;
+  lk.VideoTrack? remoteVideoTrack;
+  sio.Socket? _consultationSocket;
 
   // ---- Clinical documentation (populated from backend on resume; no live editor UI) ----
   SoapNote soap = SoapNote();
@@ -353,16 +650,15 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Turns a caught error into a short, user-facing string. Special-cases
-  /// 401/403 with no dev token configured, since that's the single most
-  /// likely cause of every real call failing right now (see `ApiConfig`).
+  /// Turns a caught error into a short, user-facing string. A 401 reaching
+  /// here means `ApiClient.onUnauthorized` already tried and failed to
+  /// refresh the session (see that hook in [_wireApiAuth]), which also
+  /// triggers [logout] — so this is just the message for whatever call was
+  /// in flight when that happened, not a call to action in itself.
   String _describeError(Object e) {
     if (e is ApiException) {
-      if (e.isUnauthorized && !ApiConfig.hasDevToken) {
-        return 'No dev auth token configured — see ApiConfig / AGENTS.md.';
-      }
       if (e.isUnauthorized) {
-        return 'Session expired — the dev token needs refreshing.';
+        return 'Your session expired — please log in again.';
       }
       return e.message;
     }
@@ -379,69 +675,159 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ---- doctor registration wizard (mocked — see ApiConfig doc comment) ----
+  // ---- doctor solo-apply application (POST /doctors/apply) ----
   /// Called once from the final "Submit Application" step of
-  /// [DoctorRegistrationScreen]. Stores every field collected across the
-  /// 4 steps, derives [digitalSignature] from the typed name (mirroring the
-  /// old "type your name as signature" onboarding step), and flips the app
-  /// straight into the logged-in + onboarded state — there is no separate
-  /// login step in this flow.
-  void completeRegistration({
-    required String firstName,
-    required String middleName,
-    required String lastName,
-    required DateTime? dateOfBirth,
-    required String gender,
-    required String contactPhone,
-    required String officialEmail,
-    required String nmcRegistrationNumber,
-    required int experienceYears,
-    required List<String> specialties,
-    required List<Map<String, String>> qualifications,
-    required List<String> languages,
-    required String clinicLocation,
-    required String state,
-    required String city,
-    required String pincode,
-    required double videoFee,
-    required double inPersonFee,
-    required String? nmcCertificateFile,
-    required String? govIdFile,
-    required String? degreeCertificateFile,
-  }) {
-    regFirstName = firstName;
-    regMiddleName = middleName;
-    regLastName = lastName;
-    regDateOfBirth = dateOfBirth;
-    regGender = gender;
-    regContactPhone = contactPhone;
-    regOfficialEmail = officialEmail;
-    nmcNumber = nmcRegistrationNumber;
-    regExperienceYears = experienceYears;
-    regSpecialties = specialties;
-    regQualifications = qualifications;
-    regLanguages = languages;
-    regClinicLocation = clinicLocation;
-    regState = state;
-    regCity = city;
-    regPincode = pincode;
-    regVideoFee = videoFee;
-    regInPersonFee = inPersonFee;
-    regNmcCertificateFile = nmcCertificateFile;
-    regGovIdFile = govIdFile;
-    regDegreeCertificateFile = degreeCertificateFile;
-
-    final fullName = [firstName, middleName, lastName].where((s) => s.trim().isNotEmpty).join(' ');
-    digitalSignature = fullName;
-    isNmcVerified = true;
-    isLoggedIn = true;
-    isOnboarded = true;
-    logAuditEvent('Doctor registration submitted for $fullName');
+  /// [DoctorRegistrationScreen] — already authenticated via the mobile JWT
+  /// from OTP login, so `POST /doctors/apply` (`optionalAuth`) links the
+  /// application to this account immediately rather than by email at
+  /// verification time. Uploads any provided documents first.
+  ///
+  /// Returns an error message on failure, or null on success. Deliberately
+  /// does NOT change [authStage] — the wizard shows a success summary first,
+  /// and [acknowledgeApplicationSubmitted] is what actually navigates away,
+  /// once the doctor continues past it (mirrors the previous mocked flow's
+  /// UX, just backed by a real submission now).
+  Future<String?> submitDoctorApplication(RegistrationData data) async {
+    regFirstName = data.firstName;
+    regMiddleName = data.middleName;
+    regLastName = data.lastName;
+    regDateOfBirth = data.dateOfBirth;
+    regGender = data.gender;
+    regContactPhone = data.contactPhone;
+    regOfficialEmail = data.officialEmail;
+    nmcNumber = data.nmcRegistrationNumber;
+    regExperienceYears = data.experienceYears;
+    regSpecialties = data.specialties;
+    regQualifications = data.qualifications;
+    regLanguages = data.languages;
+    regClinicLocation = data.clinicLocation;
+    regState = data.state;
+    regCity = data.city;
+    regPincode = data.pincode;
+    regVideoFee = data.videoFee;
+    regInPersonFee = data.inPersonFee;
+    regNmcCertificateFile = data.nmcCertificateFile;
+    regGovIdFile = data.govIdFile;
+    regDegreeCertificateFile = data.degreeCertificateFile;
     notifyListeners();
-    unawaited(_secureStorage.write(key: _kSignatureKey, value: fullName).catchError((_) {
-      // Best-effort; the signature still works for this session even if
-      // secure storage is unavailable, it just won't survive a restart.
-    }));
+
+    try {
+      final documents = <String, String>{};
+      if (data.nmcCertificateFile != null) {
+        documents['nmcCert'] = await Api.doctors.uploadDocument(File(data.nmcCertificateFile!), 'nmc_cert');
+      }
+      if (data.govIdFile != null) {
+        documents['idProof'] = await Api.doctors.uploadDocument(File(data.govIdFile!), 'gov_id');
+      }
+      if (data.degreeCertificateFile != null) {
+        documents['degreeCert'] = await Api.doctors.uploadDocument(File(data.degreeCertificateFile!), 'degree_cert');
+      }
+
+      await Api.doctors.apply({
+        'firstName': data.firstName,
+        if (data.middleName.trim().isNotEmpty) 'middleName': data.middleName,
+        'lastName': data.lastName,
+        'email': data.officialEmail,
+        if (data.gender.isNotEmpty) 'gender': data.gender.toLowerCase(),
+        if (data.dateOfBirth != null) 'dateOfBirth': data.dateOfBirth!.toIso8601String(),
+        'phone': data.contactPhone,
+        'nmcRegistrationNumber': data.nmcRegistrationNumber,
+        'specialties': data.specialties,
+        'experience': data.experienceYears,
+        'qualifications': data.qualifications
+            .map((q) => {'degree': q['degree'], 'institution': q['institution'], 'year': int.tryParse(q['year'] ?? '')})
+            .toList(),
+        'languages': data.languages,
+        'location': {'address': data.clinicLocation, 'city': data.city, 'state': data.state, 'pincode': data.pincode},
+        'consultationFeeInPerson': data.inPersonFee,
+        'consultationFeeOnline': data.videoFee,
+        'consultationType': 'both',
+        if (documents.isNotEmpty) 'documents': documents,
+      });
+
+      digitalSignature = data.fullName;
+      isNmcVerified = false; // pending super-admin verification, not true yet
+      logAuditEvent('Doctor application submitted for ${data.fullName}');
+      notifyListeners();
+      unawaited(_secureStorage.write(key: _kSignatureKey, value: data.fullName).catchError((_) {
+        // Best-effort; the signature still works for this session even if
+        // secure storage is unavailable, it just won't survive a restart.
+      }));
+      return null;
+    } catch (e) {
+      final message = _describeError(e);
+      logAuditEvent('Doctor application submission failed: $message');
+      return message;
+    }
+  }
+
+  /// Called once the doctor dismisses the post-submit success summary.
+  void acknowledgeApplicationSubmitted() {
+    authStage = AuthStage.pendingReview;
+    logAuditEvent('Application submission acknowledged');
+    notifyListeners();
+  }
+
+  // ---- hospital-invite application (POST /invites/:token/*) ----
+  /// `GET /invites/:token`. Returns null (and surfaces a notification) on
+  /// any failure — invalid/expired/consumed tokens all read the same to the
+  /// caller: "couldn't load this invite."
+  Future<Map<String, dynamic>?> loadInvite(String token) async {
+    try {
+      return await Api.invites.get(token);
+    } catch (e) {
+      _pushNotification(_describeError(e));
+      return null;
+    }
+  }
+
+  /// `PUT /auth/me/email` — a phone-only OTP account has no email by
+  /// default; the invite flow requires one matching the invite (see
+  /// `invite.controller.js`'s `EMAIL_MISMATCH` check). Returns an error
+  /// message, or null on success.
+  Future<String?> setMyEmail(String email) async {
+    try {
+      await Api.auth.updateMyEmail(email);
+      return null;
+    } catch (e) {
+      return _describeError(e);
+    }
+  }
+
+  /// `POST /invites/:token/application` — autosave; failures are non-fatal
+  /// per the website's own behavior (returns an error string for the caller
+  /// to toast, not block navigation on).
+  Future<String?> saveInviteDraft(String token, Map<String, dynamic> body) async {
+    try {
+      await Api.invites.saveDraft(token, body);
+      return null;
+    } catch (e) {
+      return _describeError(e);
+    }
+  }
+
+  Future<String?> uploadInviteDocument(String token, File file, String docType) async {
+    try {
+      await Api.invites.uploadDocument(token, file, docType);
+      return null;
+    } catch (e) {
+      return _describeError(e);
+    }
+  }
+
+  /// `POST /invites/:token/application/submit` — on success, moves to
+  /// [AuthStage.pendingReview] immediately (unlike the solo-apply wizard,
+  /// there's no local success-summary screen to defer past here).
+  Future<String?> submitInviteApplication(String token) async {
+    try {
+      await Api.invites.submit(token);
+      authStage = AuthStage.pendingReview;
+      logAuditEvent('Hospital invite application submitted');
+      notifyListeners();
+      return null;
+    } catch (e) {
+      return _describeError(e);
+    }
   }
 
   void grantNotificationPermission() {
@@ -453,12 +839,6 @@ class AppState extends ChangeNotifier {
   void grantCameraMicPermission() {
     cameraMicGranted = true;
     logAuditEvent('Camera & Mic permissions granted');
-    notifyListeners();
-  }
-
-  void completeOnboarding() {
-    isOnboarded = true;
-    logAuditEvent('Onboarding completed');
     notifyListeners();
   }
 
@@ -478,41 +858,6 @@ class AppState extends ChangeNotifier {
     isAppLocked = false;
     logAuditEvent('App unlocked via Biometrics');
     notifyListeners();
-  }
-
-  void logout() {
-    isLoggedIn = false;
-    isOnboarded = false;
-    nmcNumber = '';
-    isNmcVerified = false;
-    digitalSignature = '';
-    notificationsGranted = false;
-    cameraMicGranted = false;
-    isAppLocked = false;
-    regFirstName = '';
-    regMiddleName = '';
-    regLastName = '';
-    regDateOfBirth = null;
-    regGender = '';
-    regContactPhone = '';
-    regOfficialEmail = '';
-    regExperienceYears = 0;
-    regSpecialties = [];
-    regQualifications = [];
-    regLanguages = [];
-    regClinicLocation = '';
-    regState = '';
-    regCity = '';
-    regPincode = '';
-    regVideoFee = 500;
-    regInPersonFee = 500;
-    regNmcCertificateFile = null;
-    regGovIdFile = null;
-    regDegreeCertificateFile = null;
-    _resetConsultDraft();
-    logAuditEvent('User logged out');
-    notifyListeners();
-    unawaited(_secureStorage.delete(key: _kSignatureKey).catchError((_) {}));
   }
 
   void logAuditEvent(String action) {
@@ -723,7 +1068,7 @@ class AppState extends ChangeNotifier {
   /// [approveAndSign]) can tell a real completion apart from one that only
   /// happened locally.
   Future<bool> completeConsultation() async {
-    if (rtcState != 'disconnected') endCall();
+    if (rtcState != 'disconnected') await endCall();
     final id = activePatientId;
     final p = id == null ? null : _findQueue(id);
     if (p == null || id == null) return false;
@@ -912,12 +1257,11 @@ class AppState extends ChangeNotifier {
   }
 
   void _resetConsultDraft() {
+    if (rtcState != 'disconnected') unawaited(_teardownCall());
     rtcState = 'disconnected';
     callSeconds = 0;
     _callTimer?.cancel();
     _callTimer = null;
-    _transcriptTimer?.cancel();
-    _transcriptTimer = null;
     audioMuted = false;
     videoMuted = false;
     screenSharing = false;
@@ -937,15 +1281,61 @@ class AppState extends ChangeNotifier {
     activeTranscript = [];
   }
 
-  // ---- WebRTC call simulation actions ----
-  void beginCall() {
+  // ---- LiveKit video call actions ----
+  /// Test-only backdoor: drives the join/leave-confirmation UI without a
+  /// real LiveKit connection, which needs camera/mic/network the widget-test
+  /// sandbox doesn't have (see `debugSignInForTests`'s doc comment — same
+  /// rationale). Real media is exercised by manual/device testing instead.
+  @visibleForTesting
+  void debugConnectCallForTests() {
+    rtcState = 'connected';
+    callSeconds = 0;
+    _callTimer?.cancel();
+    _callTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      callSeconds++;
+      notifyListeners();
+    });
+    notifyListeners();
+  }
+
+  /// Fetches a real LiveKit token (`POST /consultations/:id/video/token`,
+  /// mobile-JWT-ready server-side) and connects. Requires the consultation
+  /// to have already started — [startNewConsult]/[resumeConsult] set
+  /// `p.consultationId`; there's no call without one.
+  Future<void> beginCall() async {
+    final id = activePatientId;
+    final p = id == null ? null : _findQueue(id);
+    final consultationId = p?.consultationId;
+    if (consultationId == null) {
+      _pushNotification('Could not start the call — this consultation has no server session yet.');
+      return;
+    }
+
     rtcState = 'connecting';
     notifyListeners();
 
-    Timer(const Duration(milliseconds: 1000), () {
+    try {
+      final tokenData = await Api.consultations.getVideoToken(consultationId);
+      final token = tokenData['token'] as String?;
+      final livekitUrl = tokenData['livekitUrl'] as String?;
+      if (token == null || livekitUrl == null) {
+        throw ApiException(message: 'Server did not return a video token');
+      }
+
+      final room = lk.Room(roomOptions: const lk.RoomOptions(adaptiveStream: true, dynacast: true));
+      _room = room;
+      final listener = room.createListener();
+      _roomListener = listener;
+      _wireRoomEvents(listener);
+
+      await room.connect(livekitUrl, token);
+      await room.localParticipant?.setMicrophoneEnabled(true);
+      await room.localParticipant?.setCameraEnabled(true);
+      localVideoTrack = _firstVideoTrack(room.localParticipant?.videoTrackPublications);
+
       rtcState = 'connected';
       callSeconds = 0;
-      logAuditEvent('WebRTC connection established');
+      logAuditEvent('LiveKit call connected (consultation $consultationId)');
 
       _callTimer?.cancel();
       _callTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -953,69 +1343,186 @@ class AppState extends ChangeNotifier {
         notifyListeners();
       });
 
-      // Start streaming dialogue transcript
-      _startTranscriptStreaming();
+      unawaited(_connectConsultationSocket(consultationId));
       notifyListeners();
-    });
-  }
-
-  void triggerPoorNetwork() {
-    if (rtcState == 'connected') {
-      rtcState = 'reconnecting';
-      logAuditEvent('WebRTC connection dropped: reconnecting...');
+    } catch (e) {
+      rtcState = 'failed';
+      logAuditEvent('LiveKit connect failed: ${_describeError(e)}');
+      _pushNotification('Could not join the video call — ${_describeError(e)}');
       notifyListeners();
-
-      Timer(const Duration(seconds: 3), () {
-        if (rtcState == 'reconnecting') {
-          rtcState = 'connected';
-          logAuditEvent('WebRTC connection recovered');
-          notifyListeners();
-        }
-      });
     }
   }
 
-  void endCall() {
-    rtcState = 'disconnected';
+  lk.VideoTrack? _firstVideoTrack(List<lk.LocalTrackPublication>? pubs) {
+    if (pubs == null || pubs.isEmpty) return null;
+    final track = pubs.first.track;
+    return track is lk.VideoTrack ? track as lk.VideoTrack : null;
+  }
+
+  void _wireRoomEvents(lk.EventsListener<lk.RoomEvent> listener) {
+    listener
+      ..on<lk.RoomReconnectingEvent>((_) {
+        rtcState = 'reconnecting';
+        logAuditEvent('LiveKit connection interrupted — reconnecting');
+        notifyListeners();
+      })
+      ..on<lk.RoomReconnectedEvent>((_) {
+        rtcState = 'connected';
+        logAuditEvent('LiveKit connection recovered');
+        notifyListeners();
+      })
+      ..on<lk.RoomDisconnectedEvent>((event) {
+        if (rtcState == 'disconnected') return;
+        logAuditEvent('LiveKit room disconnected: ${event.reason}');
+        unawaited(_teardownCall());
+      })
+      ..on<lk.TrackSubscribedEvent>((event) {
+        final track = event.track;
+        if (track is lk.VideoTrack) {
+          remoteVideoTrack = track;
+          notifyListeners();
+        }
+      })
+      ..on<lk.TrackUnsubscribedEvent>((event) {
+        if (identical(remoteVideoTrack, event.track)) {
+          remoteVideoTrack = null;
+          notifyListeners();
+        }
+      })
+      ..on<lk.ParticipantDisconnectedEvent>((_) {
+        remoteVideoTrack = null;
+        logAuditEvent('Patient left the video call');
+        notifyListeners();
+      });
+  }
+
+  /// `/consultation` Socket.IO namespace — join/leave signalling and live
+  /// transcript chunks (Deepgram STT, server-side). Auth rides the same
+  /// mobile JWT as REST (`authAny`'s precedence — see the socket's server
+  /// middleware). Audio capture-and-forward for transcription
+  /// (`transcript:audio`) is NOT wired here: it would need a second,
+  /// independent mic-capture pipeline running alongside LiveKit's own
+  /// (mobile OS audio sessions are generally exclusive-access), which is a
+  /// separate native-audio effort — the transcript panel still shows
+  /// whatever the server pushes, honestly empty if nothing does.
+  Future<void> _connectConsultationSocket(String consultationId) async {
+    try {
+      final socket = sio.io(
+        '${ApiConfig.socketBaseUrl}/consultation',
+        sio.OptionBuilder()
+            .setTransports(['websocket'])
+            .setQuery({'token': _accessToken ?? ''})
+            .disableAutoConnect()
+            .build(),
+      );
+      _consultationSocket = socket;
+      socket.onConnect((_) {
+        socket.emit('consultation:join', {'consultationId': consultationId});
+        socket.emit('transcript:start', {'consultationId': consultationId});
+      });
+      socket.on('transcript:chunk', (data) {
+        if (data is Map) {
+          activeTranscript.add(TranscriptLine(speaker: (data['speaker'] as String?) ?? 'doctor', text: (data['text'] as String?) ?? ''));
+          notifyListeners();
+        }
+      });
+      socket.on('message:received', (data) {
+        if (data is Map && data['message'] is Map) {
+          inCallMessages.add(Map<String, dynamic>.from(data['message'] as Map));
+          notifyListeners();
+        }
+      });
+      socket.on('participant:joined', (_) => logAuditEvent('Patient joined the consultation room'));
+      socket.on('participant:left', (_) => logAuditEvent('Patient left the consultation room'));
+      socket.on('error', (data) => logAuditEvent('Consultation socket error: $data'));
+      socket.connect();
+    } catch (e) {
+      logAuditEvent('Consultation socket connect failed: ${_describeError(e)}');
+    }
+  }
+
+  /// In-call async chat (`message:send`/`message:received`) — separate from
+  /// the transcript; persisted server-side on `Consultation.messages`.
+  List<Map<String, dynamic>> inCallMessages = [];
+
+  void sendConsultationMessage(String text) {
+    final trimmed = text.trim();
+    final socket = _consultationSocket;
+    final id = activePatientId;
+    final consultationId = id == null ? null : _findQueue(id)?.consultationId;
+    if (trimmed.isEmpty || socket == null || consultationId == null) return;
+    socket.emit('message:send', {'consultationId': consultationId, 'text': trimmed});
+  }
+
+  Future<void> endCall() => _teardownCall(emitLeave: true);
+
+  Future<void> _teardownCall({bool emitLeave = false}) async {
+    if (emitLeave) {
+      final id = activePatientId;
+      final consultationId = id == null ? null : _findQueue(id)?.consultationId;
+      if (consultationId != null) {
+        _consultationSocket?.emit('transcript:stop', {'consultationId': consultationId});
+        _consultationSocket?.emit('consultation:leave', {'consultationId': consultationId});
+      }
+    }
     _callTimer?.cancel();
     _callTimer = null;
-    _transcriptTimer?.cancel();
-    _transcriptTimer = null;
-    logAuditEvent('WebRTC call ended');
+    await _roomListener?.dispose();
+    _roomListener = null;
+    try {
+      await _room?.disconnect();
+    } catch (_) {
+      // Already gone (e.g. server-initiated disconnect) — nothing to clean up.
+    }
+    _room = null;
+    localVideoTrack = null;
+    remoteVideoTrack = null;
+    _consultationSocket?.disconnect();
+    _consultationSocket = null;
+    inCallMessages = [];
+    rtcState = 'disconnected';
+    audioMuted = false;
+    videoMuted = false;
+    screenSharing = false;
+    logAuditEvent('LiveKit call ended');
     notifyListeners();
   }
 
-  void toggleMic() {
-    audioMuted = !audioMuted;
-    logAuditEvent('Microphone toggled to: ${audioMuted ? "Muted" : "Active"}');
+  Future<void> toggleMic() async {
+    final newMuted = !audioMuted;
+    try {
+      await _room?.localParticipant?.setMicrophoneEnabled(!newMuted);
+      audioMuted = newMuted;
+    } catch (e) {
+      logAuditEvent('Toggle microphone failed: ${_describeError(e)}');
+    }
     notifyListeners();
   }
 
-  void toggleCam() {
-    videoMuted = !videoMuted;
-    logAuditEvent('Camera toggled to: ${videoMuted ? "Off" : "On"}');
+  Future<void> toggleCam() async {
+    final newMuted = !videoMuted;
+    try {
+      await _room?.localParticipant?.setCameraEnabled(!newMuted);
+      videoMuted = newMuted;
+      localVideoTrack = newMuted ? null : _firstVideoTrack(_room?.localParticipant?.videoTrackPublications);
+    } catch (e) {
+      logAuditEvent('Toggle camera failed: ${_describeError(e)}');
+    }
     notifyListeners();
   }
 
-  void toggleShare() {
-    screenSharing = !screenSharing;
-    logAuditEvent('Screen share toggled to: $screenSharing');
+  Future<void> toggleShare() async {
+    final newSharing = !screenSharing;
+    try {
+      await _room?.localParticipant?.setScreenShareEnabled(newSharing);
+      screenSharing = newSharing;
+    } catch (e) {
+      // Mobile screen-share needs a foreground service + MediaProjection
+      // flow (Android) that isn't wired in this pass — fails gracefully.
+      logAuditEvent('Screen share toggle failed: ${_describeError(e)}');
+      _pushNotification('Screen sharing is not available on this device yet.');
+    }
     notifyListeners();
-  }
-
-  // ---- AI transcript streaming (still simulated — see WebRTC note above) ----
-  void _startTranscriptStreaming() {
-    int index = 0;
-    _transcriptTimer?.cancel();
-    _transcriptTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (index < MockData.transcriptSeed.length) {
-        activeTranscript.add(MockData.transcriptSeed[index]);
-        index++;
-        notifyListeners();
-      } else {
-        timer.cancel();
-      }
-    });
   }
 
   // ---- drug warning logic ----
@@ -1529,7 +2036,10 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _callTimer?.cancel();
-    _transcriptTimer?.cancel();
+    unawaited(_roomListener?.dispose());
+    unawaited(_room?.disconnect());
+    _consultationSocket?.disconnect();
+    unawaited(_fcmTokenRefreshSub?.cancel());
     _connectivitySub?.cancel();
     super.dispose();
   }

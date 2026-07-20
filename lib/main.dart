@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -16,6 +17,22 @@ void main() {
       FlutterError.presentError(details);
       debugPrint('Uncaught Flutter error: ${details.exceptionAsString()}');
     };
+    WidgetsFlutterBinding.ensureInitialized();
+    // TEMPORARY guard: this repo has no real Firebase project config yet
+    // (no `android/app/google-services.json` / iOS `GoogleService-Info.plist`,
+    // and the `google-services` Gradle plugin isn't applied — adding it
+    // without that file would break the Android build for everyone). Add a
+    // Firebase app for this package name in the Firebase console, drop the
+    // generated config in, apply the Gradle plugin, then this becomes a
+    // real (not caught) call — `AppState.initPushNotifications` already
+    // degrades gracefully to "no push" for as long as this throws.
+    unawaited(() async {
+      try {
+        await Firebase.initializeApp();
+      } catch (e) {
+        debugPrint('Firebase not configured — push notifications disabled: $e');
+      }
+    }());
     runApp(const MediConnectDoctorApp());
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error\n$stack');

@@ -15,11 +15,30 @@ const _dayLabels = {
   'sunday': 'Sunday',
 };
 
-class _DayHours {
-  _DayHours({this.open = false, this.start = const TimeOfDay(hour: 9, minute: 0), this.end = const TimeOfDay(hour: 17, minute: 0)});
-  bool open;
+const _capabilityOptions = [
+  ('in_person', 'In-Person Only'),
+  ('online', 'Video Only'),
+  ('both', 'Both'),
+];
+
+const _modeLabels = {'online': '🎥 Video', 'in_person': '🏥 In-Person', 'both': 'Both'};
+const _slotDurations = [15, 20, 30];
+
+/// Which mode options a range can be set to, given the doctor's overall
+/// consultation-modes capability — mirrors the website's `AvailabilityEditor`.
+List<String> _modeOptionsFor(String capability) {
+  if (capability == 'online') return const ['online'];
+  if (capability == 'in_person') return const ['in_person'];
+  return const ['online', 'in_person', 'both'];
+}
+
+String _defaultModeFor(String capability) => capability == 'both' ? 'both' : capability;
+
+class _Range {
+  _Range({required this.start, required this.end, required this.mode});
   TimeOfDay start;
   TimeOfDay end;
+  String mode;
 }
 
 TimeOfDay? _parseTime(String? raw) {
@@ -34,12 +53,12 @@ TimeOfDay? _parseTime(String? raw) {
 
 String _formatTime(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
-/// Working Hours: a real weekly-schedule editor backed by the already-live
-/// `GET/PUT /doctors/me/availability` endpoints (`DoctorAvailability` model
-/// server-side) — replaces what used to be a dead "Nothing here yet" row on
-/// the Profile screen. One open/closed toggle + one time range per day; the
-/// backend supports multiple ranges per day, but a single range covers the
-/// real need without over-building a UI nobody asked for.
+/// Working Hours: a real weekly-schedule editor backed by the live
+/// `GET/PUT /doctors/me/availability` + `PUT /doctors/me/profile` endpoints.
+/// Each day holds any number of independently mode-tagged ranges (e.g.
+/// 09:00-13:00 video, 13:00-17:00 in-person), matching the website's
+/// `AvailabilityEditor` component 1:1, plus the "Consultation Modes Offered"
+/// capability selector that also drives `Doctor.consultationType`.
 class WorkingHoursScreen extends StatefulWidget {
   const WorkingHoursScreen({super.key});
 
@@ -48,7 +67,9 @@ class WorkingHoursScreen extends StatefulWidget {
 }
 
 class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
-  final Map<String, _DayHours> _days = {for (final d in AppState.weekdays) d: _DayHours()};
+  final Map<String, List<_Range>> _schedule = {for (final d in AppState.weekdays) d: <_Range>[]};
+  String _capability = 'both';
+  int _slotDurationMinutes = 20;
   bool _seeded = false;
   bool _saving = false;
 
@@ -56,6 +77,9 @@ class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
   void initState() {
     super.initState();
     final app = context.read<AppState>();
+    if (app.doctorProfile?['consultationType'] is String) {
+      _capability = app.doctorProfile!['consultationType'] as String;
+    }
     if (app.doctorAvailability != null) {
       _seedFromAvailability(app.doctorAvailability);
     } else {
@@ -65,42 +89,54 @@ class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
 
   void _seedFromAvailability(Map<String, dynamic>? availability) {
     _seeded = true;
+    if (availability?['slotDurationMinutes'] is int) {
+      _slotDurationMinutes = availability!['slotDurationMinutes'] as int;
+    }
     final schedule = availability?['weeklySchedule'];
     if (schedule is! Map) return;
     for (final day in AppState.weekdays) {
       final slots = schedule[day];
-      if (slots is List && slots.isNotEmpty && slots.first is Map) {
-        final slot = slots.first as Map;
-        final start = _parseTime(slot['start'] as String?);
-        final end = _parseTime(slot['end'] as String?);
-        _days[day] = _DayHours(open: true, start: start ?? const TimeOfDay(hour: 9, minute: 0), end: end ?? const TimeOfDay(hour: 17, minute: 0));
-      }
+      if (slots is! List) continue;
+      _schedule[day] = slots.whereType<Map>().map((slot) {
+        final start = _parseTime(slot['start'] as String?) ?? const TimeOfDay(hour: 9, minute: 0);
+        final end = _parseTime(slot['end'] as String?) ?? const TimeOfDay(hour: 17, minute: 0);
+        return _Range(start: start, end: end, mode: (slot['mode'] as String?) ?? _defaultModeFor(_capability));
+      }).toList();
     }
   }
 
-  Future<void> _pickTime(String day, {required bool isStart}) async {
-    final current = isStart ? _days[day]!.start : _days[day]!.end;
+  Future<void> _pickTime(_Range range, {required bool isStart}) async {
+    final current = isStart ? range.start : range.end;
     final picked = await showTimePicker(context: context, initialTime: current);
     if (picked == null) return;
     setState(() {
       if (isStart) {
-        _days[day]!.start = picked;
+        range.start = picked;
       } else {
-        _days[day]!.end = picked;
+        range.end = picked;
       }
     });
   }
+
+  void _addRange(String day) {
+    setState(() => _schedule[day]!.add(_Range(start: const TimeOfDay(hour: 9, minute: 0), end: const TimeOfDay(hour: 17, minute: 0), mode: _defaultModeFor(_capability))));
+  }
+
+  void _removeRange(String day, int index) => setState(() => _schedule[day]!.removeAt(index));
 
   Future<void> _save(AppState app) async {
     setState(() => _saving = true);
     final weeklySchedule = {
       for (final day in AppState.weekdays)
-        day: _days[day]!.open ? [{'start': _formatTime(_days[day]!.start), 'end': _formatTime(_days[day]!.end), 'mode': 'both'}] : <Map<String, String>>[],
+        day: _schedule[day]!.map((r) => {'start': _formatTime(r.start), 'end': _formatTime(r.end), 'mode': r.mode}).toList(),
     };
-    final ok = await app.saveAvailability(weeklySchedule);
+    final results = await Future.wait([
+      app.saveAvailability(weeklySchedule, slotDurationMinutes: _slotDurationMinutes),
+      app.updateDoctorProfile({'consultationType': _capability}),
+    ]);
     if (!mounted) return;
     setState(() => _saving = false);
-    if (ok) {
+    if (results.every((ok) => ok)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Working hours saved', style: AppText.body(size: 13, color: Colors.white, weight: FontWeight.bold)), backgroundColor: AppColors.green600),
       );
@@ -115,6 +151,7 @@ class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
         if (mounted) setState(() => _seedFromAvailability(app.doctorAvailability));
       });
     }
+    final modeOptions = _modeOptionsFor(_capability);
     return Scaffold(
       backgroundColor: AppColors.blue50,
       appBar: AppBar(
@@ -134,7 +171,42 @@ class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
                   style: AppText.body(size: 12, color: AppColors.ink600),
                 ),
                 const SizedBox(height: 16),
-                for (final day in AppState.weekdays) _DayRow(dayKey: day, hours: _days[day]!, onToggle: (v) => setState(() => _days[day]!.open = v), onPickTime: (isStart) => _pickTime(day, isStart: isStart)),
+                Text('CONSULTATION MODES OFFERED', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    for (final (value, label) in _capabilityOptions)
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: _ChoiceChipButton(label: label, selected: _capability == value, onTap: () => setState(() => _capability = value)),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                for (final day in AppState.weekdays)
+                  _DayCard(
+                    dayKey: day,
+                    ranges: _schedule[day]!,
+                    modeOptions: modeOptions,
+                    onAddRange: () => _addRange(day),
+                    onRemoveRange: (i) => _removeRange(day, i),
+                    onPickTime: (r, isStart) => _pickTime(r, isStart: isStart),
+                    onModeChanged: (r, mode) => setState(() => r.mode = mode),
+                  ),
+                const SizedBox(height: 8),
+                Text('SLOT DURATION', style: AppText.mono(size: 10, color: AppColors.ink600, weight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    for (final d in _slotDurations)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _ChoiceChipButton(label: '$d min', selected: _slotDurationMinutes == d, onTap: () => setState(() => _slotDurationMinutes = d)),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 20),
                 AppButton(label: _saving ? 'Saving...' : 'Save Changes', block: true, loading: _saving, onPressed: _saving ? null : () => _save(app)),
               ],
@@ -143,45 +215,117 @@ class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
   }
 }
 
-class _DayRow extends StatelessWidget {
-  const _DayRow({required this.dayKey, required this.hours, required this.onToggle, required this.onPickTime});
+class _ChoiceChipButton extends StatelessWidget {
+  const _ChoiceChipButton({required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? AppColors.blue600 : AppColors.white,
+          border: Border.all(color: selected ? AppColors.blue600 : AppColors.line),
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+        ),
+        child: Text(label, style: AppText.body(size: 12, weight: FontWeight.w600, color: selected ? Colors.white : AppColors.ink600)),
+      ),
+    );
+  }
+}
+
+class _DayCard extends StatelessWidget {
+  const _DayCard({
+    required this.dayKey,
+    required this.ranges,
+    required this.modeOptions,
+    required this.onAddRange,
+    required this.onRemoveRange,
+    required this.onPickTime,
+    required this.onModeChanged,
+  });
   final String dayKey;
-  final _DayHours hours;
-  final ValueChanged<bool> onToggle;
-  final ValueChanged<bool> onPickTime;
+  final List<_Range> ranges;
+  final List<String> modeOptions;
+  final VoidCallback onAddRange;
+  final ValueChanged<int> onRemoveRange;
+  final void Function(_Range range, bool isStart) onPickTime;
+  final void Function(_Range range, String mode) onModeChanged;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        border: Border.all(color: AppColors.line),
-        borderRadius: BorderRadius.circular(AppRadius.md),
-      ),
+      decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.line), borderRadius: BorderRadius.circular(AppRadius.md)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Expanded(child: Text(_dayLabels[dayKey]!, style: AppText.body(size: 13.5, weight: FontWeight.w700))),
-              Text(hours.open ? 'Open' : 'Closed', style: AppText.body(size: 11.5, weight: FontWeight.w600, color: hours.open ? AppColors.green600 : AppColors.ink400)),
-              Switch(value: hours.open, activeThumbColor: AppColors.green600, onChanged: onToggle),
+              TextButton.icon(
+                onPressed: onAddRange,
+                icon: const Icon(Icons.add, size: 15),
+                label: Text('Add range', style: AppText.body(size: 11.5, weight: FontWeight.w600)),
+                style: TextButton.styleFrom(foregroundColor: AppColors.blue600, padding: EdgeInsets.zero, minimumSize: const Size(0, 0), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+              ),
             ],
           ),
-          if (hours.open) ...[
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Expanded(child: _TimeChip(label: 'Start', time: hours.start, onTap: () => onPickTime(true))),
-                const SizedBox(width: 10),
-                Expanded(child: _TimeChip(label: 'End', time: hours.end, onTap: () => onPickTime(false))),
-              ],
-            ),
-          ],
+          if (ranges.isEmpty)
+            Padding(padding: const EdgeInsets.only(top: 2, bottom: 4), child: Text('Unavailable', style: AppText.body(size: 11.5, color: AppColors.ink400)))
+          else
+            for (var i = 0; i < ranges.length; i++) ...[
+              const SizedBox(height: 6),
+              _RangeRow(range: ranges[i], modeOptions: modeOptions, onPickTime: (isStart) => onPickTime(ranges[i], isStart), onModeChanged: (m) => onModeChanged(ranges[i], m), onRemove: () => onRemoveRange(i)),
+            ],
         ],
       ),
+    );
+  }
+}
+
+class _RangeRow extends StatelessWidget {
+  const _RangeRow({required this.range, required this.modeOptions, required this.onPickTime, required this.onModeChanged, required this.onRemove});
+  final _Range range;
+  final List<String> modeOptions;
+  final ValueChanged<bool> onPickTime;
+  final ValueChanged<String> onModeChanged;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: _TimeChip(label: 'Start', time: range.start, onTap: () => onPickTime(true))),
+        const SizedBox(width: 6),
+        Expanded(child: _TimeChip(label: 'End', time: range.end, onTap: () => onPickTime(false))),
+        const SizedBox(width: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(color: AppColors.blue50, borderRadius: BorderRadius.circular(AppRadius.sm), border: Border.all(color: AppColors.line)),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: modeOptions.contains(range.mode) ? range.mode : modeOptions.first,
+              isDense: true,
+              style: AppText.body(size: 11, weight: FontWeight.w600, color: AppColors.blue700),
+              items: modeOptions.map((m) => DropdownMenuItem(value: m, child: Text(_modeLabels[m] ?? m))).toList(),
+              onChanged: modeOptions.length == 1 ? null : (v) { if (v != null) onModeChanged(v); },
+            ),
+          ),
+        ),
+        InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+          onTap: onRemove,
+          child: const Padding(padding: EdgeInsets.all(6), child: Icon(Icons.delete_outline, size: 16, color: AppColors.red600)),
+        ),
+      ],
     );
   }
 }
@@ -201,10 +345,11 @@ class _TimeChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(color: AppColors.blue50, borderRadius: BorderRadius.circular(AppRadius.sm), border: Border.all(color: AppColors.line)),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.access_time, size: 14, color: AppColors.blue700),
-            const SizedBox(width: 6),
-            Text('$label: ${_formatTime(time)}', style: AppText.body(size: 11.5, weight: FontWeight.w600, color: AppColors.blue700)),
+            const Icon(Icons.access_time, size: 13, color: AppColors.blue700),
+            const SizedBox(width: 4),
+            Flexible(child: Text(_formatTime(time), style: AppText.body(size: 11, weight: FontWeight.w600, color: AppColors.blue700), overflow: TextOverflow.ellipsis)),
           ],
         ),
       ),

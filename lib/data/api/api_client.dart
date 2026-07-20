@@ -26,8 +26,9 @@ class ApiResult {
 /// notes, soap, mark-read, etc.) return no `data` key at all on success, so
 /// callers must treat a missing/null `data` as a valid outcome, not an error.
 ///
-/// Auth: see `ApiConfig` doc comment — attaches a hand-supplied dev Clerk
-/// token as a Bearer header since the app's own login flow is still mocked.
+/// Auth: [getAccessToken]/[onUnauthorized] are wired once from `AppState`
+/// after real login (`POST /auth/mobile/verify-otp`) — this client itself
+/// holds no session state, just the hooks to read/refresh it.
 class ApiClient {
   ApiClient._internal()
       : dio = Dio(
@@ -41,10 +42,30 @@ class ApiClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          if (ApiConfig.hasDevToken) {
-            options.headers['Authorization'] = 'Bearer ${ApiConfig.devClerkToken}';
+          final token = getAccessToken?.call();
+          if (token != null && token.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $token';
           }
           handler.next(options);
+        },
+        onError: (error, handler) async {
+          // Single retry-after-refresh on 401 — guarded by an `extra` flag so
+          // a refresh that itself 401s (refresh token expired too) can't loop.
+          final alreadyRetried = error.requestOptions.extra['retriedAfterRefresh'] == true;
+          if (error.response?.statusCode == 401 && !alreadyRetried && onUnauthorized != null) {
+            final refreshed = await onUnauthorized!();
+            if (refreshed) {
+              final retryOptions = error.requestOptions..extra['retriedAfterRefresh'] = true;
+              final token = getAccessToken?.call();
+              if (token != null) retryOptions.headers['Authorization'] = 'Bearer $token';
+              try {
+                return handler.resolve(await dio.fetch(retryOptions));
+              } on DioException catch (retryError) {
+                return handler.next(retryError);
+              }
+            }
+          }
+          handler.next(error);
         },
       ),
     );
@@ -53,6 +74,14 @@ class ApiClient {
   static final ApiClient instance = ApiClient._internal();
 
   final Dio dio;
+
+  /// Returns the current mobile-JWT access token, or null when logged out.
+  /// Set once from `AppState`.
+  String? Function()? getAccessToken;
+
+  /// Attempts a token refresh on a 401; returns whether it succeeded so the
+  /// triggering request can be retried once. Set once from `AppState`.
+  Future<bool> Function()? onUnauthorized;
 
   ApiResult _unwrap(Response response) {
     final body = response.data;
@@ -93,6 +122,15 @@ class ApiClient {
   Future<ApiResult> delete(String path, {dynamic body}) async {
     try {
       return _unwrap(await dio.delete(path, data: body));
+    } on DioException catch (e) {
+      throw ApiException.fromDio(e);
+    }
+  }
+
+  /// Multipart upload — used for document uploads (application/invite flows).
+  Future<ApiResult> postMultipart(String path, FormData formData) async {
+    try {
+      return _unwrap(await dio.post(path, data: formData));
     } on DioException catch (e) {
       throw ApiException.fromDio(e);
     }

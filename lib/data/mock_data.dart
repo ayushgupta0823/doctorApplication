@@ -162,22 +162,6 @@ class MockData {
         ),
       ];
 
-  static const transcriptSeed = [
-    TranscriptLine(speaker: 'doctor', text: 'Good morning, what brings you in today?'),
-    TranscriptLine(
-      speaker: 'patient',
-      text: "I've had a throbbing headache for two days, mostly on the left side.",
-    ),
-    TranscriptLine(
-      speaker: 'doctor',
-      text: 'Any nausea, sensitivity to light, or visual changes?',
-    ),
-    TranscriptLine(
-      speaker: 'patient',
-      text: 'Yes, bright light makes it worse and I felt nauseous yesterday.',
-    ),
-  ];
-
   static List<PatientHistory> buildPatientHistory() => [
         PatientHistory(
           id: '101',

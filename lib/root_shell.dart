@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'screens/auth/checking_session_screen.dart';
+import 'screens/auth/login_screen.dart';
+import 'screens/auth/onboarding_choice_screen.dart';
+import 'screens/auth/pending_review_screen.dart';
 import 'screens/biometric_lock_screen.dart';
 import 'screens/calendar_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/more/more_menu_screen.dart';
 import 'screens/patients_screen.dart';
-import 'screens/registration/registration_screen.dart';
 import 'screens/queue_screen.dart';
 import 'state/app_state.dart';
 import 'theme/app_theme.dart';
@@ -49,7 +52,19 @@ class RootShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
 
-    if (!app.isOnboarded) return const RegistrationScreen();
+    switch (app.authStage) {
+      case AuthStage.checkingSession:
+        return const CheckingSessionScreen();
+      case AuthStage.loggedOut:
+        return const LoginScreen();
+      case AuthStage.needsOnboarding:
+        return const OnboardingChoiceScreen();
+      case AuthStage.pendingReview:
+        return const PendingReviewScreen();
+      case AuthStage.ready:
+        break; // fall through to the main app below
+    }
+
     if (app.isAppLocked) return const BiometricLockScreen();
 
     final currentIndex = _tabs.indexOf(app.tab);
